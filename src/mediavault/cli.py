@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import webbrowser
 from pathlib import Path
 from typing import Optional
@@ -15,9 +16,11 @@ app = typer.Typer(help="MediaVault — cross-machine movie/TV library manager.")
 root_app = typer.Typer(help="Manage tracked folders (roots) on this machine.")
 pair_app = typer.Typer(help="Manage sync pairs between roots.")
 trash_app = typer.Typer(help="Inspect and clean up the OS trash / recycle bin.")
+service_app = typer.Typer(help="Run mediavault as an always-on background service (launchd/systemd).")
 app.add_typer(root_app, name="root")
 app.add_typer(pair_app, name="pair")
 app.add_typer(trash_app, name="trash")
+app.add_typer(service_app, name="service")
 
 console = Console()
 
@@ -281,6 +284,41 @@ def gui():
 
     config = _load()
     run_gui(config)
+
+
+# ------------------------------------------------------------------- service
+
+@service_app.command("install")
+def service_install(port: int = 8420):
+    """Install mediavault as an always-on background service (launchd on
+    macOS, systemd --user on Linux) so scanning/duplicate/sync-status
+    notifications keep happening even with no UI open, and it survives
+    reboots. Safe to re-run; `service uninstall` fully reverses it."""
+    from . import service
+
+    config = _load()
+    bin_path = Path(sys.executable).parent / "mediavault"
+    if not bin_path.exists():
+        console.print(f"[red]Could not find the mediavault executable next to {sys.executable}[/red]")
+        raise typer.Exit(1)
+    msg = service.install(bin_path.resolve(), Path.cwd(), config.config_path.resolve(), port=port)
+    console.print(f"[green]{msg}[/green]")
+
+
+@service_app.command("uninstall")
+def service_uninstall():
+    """Stop and remove the background service."""
+    from . import service
+
+    console.print(service.uninstall())
+
+
+@service_app.command("status")
+def service_status():
+    """Show whether the background service is installed/running."""
+    from . import service
+
+    console.print(service.status())
 
 
 if __name__ == "__main__":
