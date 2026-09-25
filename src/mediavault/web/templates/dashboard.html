@@ -25,9 +25,9 @@
     <div class="card-value">{{ quarantine_count }}</div>
     <div class="card-label">items in quarantine</div>
   </div>
-  <div class="card">
-    <div class="card-value">{{ trash_bytes|human_bytes }}</div>
-    <div class="card-label">in system trash</div>
+  <div class="card {{ '' if trash_accurate else 'warn' }}">
+    <div class="card-value">{{ trash_bytes|human_bytes }}{{ '' if trash_accurate else '+' }}</div>
+    <div class="card-label">{{ 'in system trash' if trash_accurate else 'in system trash (permission-limited, see Recycle Bin)' }}</div>
   </div>
 </div>
 

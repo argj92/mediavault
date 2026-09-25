@@ -28,6 +28,18 @@
 
 <h2>System trash</h2>
 <p class="subtle">Your OS's own Trash/Recycle Bin — often forgotten about and worth checking when reclaiming space. Deleting here is immediate and permanent.</p>
+
+{% if not trash_accurate %}
+<div class="flash" style="border-color: var(--warn); background: rgba(224,167,47,0.12);">
+  <b>This list is incomplete — mediavault can't fully read your Trash.</b>
+  {% for err in trash_access_errors %}<br>&middot; {{ err.location }}: {{ err.error }}{% endfor %}
+  <br><br>
+  On macOS: <b>System Settings &rarr; Privacy &amp; Security &rarr; Full Disk Access</b> &rarr; enable it for
+  whichever app/terminal runs mediavault, then reload this page. Until then, any total shown here is a
+  <b>floor</b>, not the real size — there's more in there than mediavault can see.
+</div>
+{% endif %}
+
 <form method="post" action="/recycle-bin/empty" onsubmit="return confirm('Permanently delete the selected items? This cannot be undone.');">
   <table>
     <tr><th></th><th>Path</th><th>Size</th><th>Location</th></tr>
@@ -39,7 +51,7 @@
       <td class="path">{{ item.source }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="4" class="subtle">Trash is empty (or not accessible from here).</td></tr>
+    <tr><td colspan="4" class="subtle">{{ "Nothing readable here right now — see the warning above." if not trash_accurate else "Trash is empty." }}</td></tr>
     {% endfor %}
   </table>
   {% if trash_items %}

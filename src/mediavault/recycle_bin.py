@@ -22,6 +22,12 @@ class TrashItem:
     source: str  # which trash location it came from
 
 
+@dataclass
+class TrashAccessError:
+    location: Path
+    error: str
+
+
 def trash_locations() -> list[Path]:
     system = platform.system()
     home = Path.home()
@@ -59,25 +65,44 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def list_trash_items(top_n: int = 50) -> list[TrashItem]:
+def scan_trash(top_n: int = 10_000) -> dict:
+    """The real scan: returns items found *and* any location mediavault
+    couldn't read, so a permission problem is never silently reported as
+    "trash is empty" — those look identical unless you check for both."""
     items: list[TrashItem] = []
+    access_errors: list[TrashAccessError] = []
+
     for loc in trash_locations():
         try:
             entries = list(loc.iterdir())
-        except OSError:
+        except OSError as exc:
+            access_errors.append(TrashAccessError(location=loc, error=str(exc)))
             continue
         for entry in entries:
             try:
                 size = entry.stat().st_size if entry.is_file() else _dir_size(entry)
-            except OSError:
+            except OSError as exc:
+                access_errors.append(TrashAccessError(location=entry, error=str(exc)))
                 continue
             items.append(TrashItem(path=entry, size=size, source=str(loc)))
+
     items.sort(key=lambda i: i.size, reverse=True)
-    return items[:top_n]
+    return {
+        "items": items[:top_n],
+        "total_bytes": sum(i.size for i in items),
+        "access_errors": access_errors,
+        # False whenever any location/item couldn't be read — the totals
+        # above are then a floor, not the real total.
+        "accurate": not access_errors,
+    }
+
+
+def list_trash_items(top_n: int = 50) -> list[TrashItem]:
+    return scan_trash(top_n=top_n)["items"]
 
 
 def total_trash_bytes() -> int:
-    return sum(i.size for i in list_trash_items(top_n=10_000))
+    return scan_trash()["total_bytes"]
 
 
 def empty_items(paths: list[str], confirm: bool = False) -> dict:

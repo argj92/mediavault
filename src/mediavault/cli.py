@@ -229,12 +229,23 @@ def icloud(label: str, top: int = 25):
 
 @trash_app.command("list")
 def trash_list(top: int = 50):
-    items = recycle_bin.list_trash_items(top_n=top)
+    scan = recycle_bin.scan_trash(top_n=top)
     table = Table("Path", "Size", "Location")
-    for i in items:
+    for i in scan["items"]:
         table.add_row(str(i.path), _human(i.size), i.source)
     console.print(table)
-    console.print(f"Total in trash: {_human(recycle_bin.total_trash_bytes())}")
+    if not scan["accurate"]:
+        console.print(
+            f"[yellow]Warning: {len(scan['access_errors'])} location(s) couldn't be read "
+            f"(permission denied) — the total below is a floor, not the real size.[/yellow]"
+        )
+        for err in scan["access_errors"]:
+            console.print(f"  [yellow]{err.location}: {err.error}[/yellow]")
+        console.print(
+            "[yellow]On macOS: System Settings -> Privacy & Security -> Full Disk Access -> "
+            "enable it for the app/terminal running mediavault, then re-run.[/yellow]"
+        )
+    console.print(f"Total in trash: {_human(scan['total_bytes'])}{'' if scan['accurate'] else ' (incomplete)'}")
 
 
 @trash_app.command("empty")

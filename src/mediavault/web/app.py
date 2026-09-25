@@ -93,7 +93,7 @@ def dashboard(request: Request, msg: str | None = None):
         pairs = db.list_sync_pairs(conn)
         untracked = [u for u in suggestions.untracked_media(conn, config.video_extensions) if not u["already_in_library"]]
         quarantine_count = len(db.list_quarantine(conn))
-    trash_bytes = recycle_bin.total_trash_bytes()
+    trash_scan = recycle_bin.scan_trash()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -108,7 +108,8 @@ def dashboard(request: Request, msg: str | None = None):
             "pairs": pairs,
             "untracked_count": len(untracked),
             "quarantine_count": quarantine_count,
-            "trash_bytes": trash_bytes,
+            "trash_bytes": trash_scan["total_bytes"],
+            "trash_accurate": trash_scan["accurate"],
             "scan_interval": config.scan_interval_minutes,
         },
     )
@@ -327,11 +328,17 @@ def icloud_page(request: Request):
 def recycle_bin_page(request: Request, msg: str | None = None):
     with get_conn(request) as conn:
         quarantine_items = db.list_quarantine(conn)
-    trash_items = recycle_bin.list_trash_items(top_n=50)
+    trash_scan = recycle_bin.scan_trash(top_n=50)
     return templates.TemplateResponse(
         request,
         "recycle_bin.html",
-        {"quarantine_items": quarantine_items, "trash_items": trash_items, "msg": msg},
+        {
+            "quarantine_items": quarantine_items,
+            "trash_items": trash_scan["items"],
+            "trash_accurate": trash_scan["accurate"],
+            "trash_access_errors": trash_scan["access_errors"],
+            "msg": msg,
+        },
     )
 
 
