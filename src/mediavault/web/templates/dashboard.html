@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MediaVault{% endblock %}
+{% block content %}
+<h1>{{ machine }}</h1>
+<p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-value">{{ roots|length }}</div>
+    <div class="card-label">tracked roots</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ total_files }}</div>
+    <div class="card-label">files indexed ({{ total_bytes|human_bytes }})</div>
+  </div>
+  <div class="card {{ 'warn' if dup_groups else '' }}">
+    <div class="card-value">{{ dup_groups|length }}</div>
+    <div class="card-label">duplicate groups ({{ wasted_bytes|human_bytes }} reclaimable)</div>
+  </div>
+  <div class="card {{ 'warn' if untracked_count else '' }}">
+    <div class="card-value">{{ untracked_count }}</div>
+    <div class="card-label">untracked media in inbox</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ quarantine_count }}</div>
+    <div class="card-label">items in quarantine</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ trash_bytes|human_bytes }}</div>
+    <div class="card-label">in system trash</div>
+  </div>
+</div>
+
+<h2>Sync pairs</h2>
+{% if pairs %}
+<table>
+  <tr><th>Pair</th><th>Status</th><th>Last synced</th><th></th></tr>
+  {% for p in pairs %}
+  <tr>
+    <td>{{ p.root_a }} &harr; {{ p.root_b }}</td>
+    <td><span class="pill {{ 'ok' if p.status == 'in_sync' else 'warn' }}">{{ p.status }}</span></td>
+    <td>{{ p.last_synced_at and "yes" or "never" }}</td>
+    <td><a href="/pairs/{{ p.id }}">details</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="subtle">No sync pairs configured yet. <a href="/pairs">Set one up</a>.</p>
+{% endif %}
+
+<h2>Roots</h2>
+<table>
+  <tr><th>Label</th><th>Role</th><th>Mode</th><th>Path</th><th>Enabled</th></tr>
+  {% for r in roots %}
+  <tr>
+    <td>{{ r.label }}</td>
+    <td>{{ r.role }}</td>
+    <td>{{ r.mode }}</td>
+    <td class="path">{{ r.path }}</td>
+    <td>{{ "yes" if r.enabled else "no" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

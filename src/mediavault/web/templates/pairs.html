@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Sync Pairs — MediaVault{% endblock %}
+{% block content %}
+<h1>Sync Pairs</h1>
+<p class="subtle">The background worker checks each pair every scan cycle and notifies you when one drifts out of sync. "Sync now" copies anything missing on the <b>mirror</b> side(s) of the pair — it never auto-fills a <b>subset</b>/<b>watch</b> root (e.g. a storage-limited iCloud folder) and never deletes anything; deletions and conflicts always need a manual review on the pair's detail page.</p>
+
+<table>
+  <tr><th>A</th><th>B</th><th>Status</th><th>To copy</th><th>Needs review</th><th colspan="2">Actions</th></tr>
+  {% for p in pairs %}
+  <tr>
+    <td>{{ p.row.root_a }}</td>
+    <td>{{ p.row.root_b }}</td>
+    <td><span class="pill {{ 'ok' if not p.plan.out_of_sync else 'warn' }}">{{ 'in sync' if not p.plan.out_of_sync else 'out of sync' }}</span></td>
+    <td>{{ p.plan.copy_to_a|length + p.plan.copy_to_b|length }}</td>
+    <td>{{ p.plan.delete_from_a|length + p.plan.delete_from_b|length + p.plan.conflicts|length }}</td>
+    <td>
+      <form method="post" action="/pairs/{{ p.row.id }}/sync"><button>Sync now</button></form>
+    </td>
+    <td><a href="/pairs/{{ p.row.id }}">Review</a></td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>Watch a new pair</h2>
+<form method="post" action="/pairs/add" class="form-grid">
+  <label>Root A
+    <select name="root_a">
+      {% for r in roots %}<option value="{{ r.label }}">{{ r.label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Root B
+    <select name="root_b">
+      {% for r in roots %}<option value="{{ r.label }}">{{ r.label }}</option>{% endfor %}
+    </select>
+  </label>
+  <button>Add pair</button>
+</form>
+{% endblock %}

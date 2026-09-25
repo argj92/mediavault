@@ -1,0 +1,75 @@
+# Copy this file to config.yaml (git-ignored) and edit it for THIS machine.
+# Every machine running mediavault has its own config.yaml with its own local
+# paths — only this example file and the code are shared through git.
+
+machine: my-mac-mini
+
+# Where mediavault keeps its own index/state for this machine.
+# Keep this outside any synced folder — it is per-machine, not shared.
+db_path: ~/.local/share/mediavault/mediavault.db
+
+# Which hashing algorithm to use for content comparison.
+# "blake3" is much faster if the optional `blake3` package is installed;
+# falls back to sha256 automatically otherwise.
+hash_algo: blake3
+
+# Set this env var to your TMDB v3 API key (https://www.themoviedb.org/settings/api)
+# to enable automatic title/year lookups. Never put the key itself in this file.
+tmdb_api_key_env: TMDB_API_KEY
+
+# File extensions considered "media" when scanning inbox/suggestion folders.
+video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts"]
+
+# How often the background worker rescans all roots, recomputes duplicates/
+# sync status, and fires notifications when something changes. Runs while
+# `mediavault web` / `mediavault gui` is up; a full rescan also always runs
+# once at startup so the local index is fresh before you look at anything.
+scan_interval_minutes: 15
+
+# Folders and sync pairs themselves are NOT configured here — they're live
+# state kept in this machine's SQLite index (db_path above) so you can add,
+# edit, or remove them from the CLI or the web/desktop UI without editing
+# YAML or restarting anything. See `mediavault root --help` and
+# `mediavault pair --help`, or the Roots / Sync pages in the UI.
+#
+# The `roots:` block below is optional and only used ONCE, the first time
+# `mediavault init` runs on a fresh machine, to seed its index. Delete it (or
+# leave it out) once you're managing roots through the UI/CLI instead.
+#
+# role:
+#   primary  - a full, authoritative copy of your library
+#   backup   - another full copy meant to mirror a primary
+#   icloud   - a folder backed by iCloud Drive (or similar) that may only
+#              hold a SUBSET of files locally at any time (placeholders for
+#              the rest). Never treated as a deletion source.
+#   inbox    - a folder to watch for untracked media worth adding to the
+#              library (e.g. Downloads), not part of sync.
+#
+# mode:
+#   mirror  - full two-way backup; a file missing on one side is a candidate
+#             to copy across (or, if it used to exist, a candidate deletion
+#             you must confirm explicitly).
+#   subset  - this root intentionally only has some files. Missing files are
+#             never treated as deletions and nothing is ever deleted here
+#             automatically.
+#   watch   - not synced at all, just scanned for suggestions/duplicates.
+roots:
+  - label: primary-library
+    path: /Volumes/Media/Movies
+    role: primary
+    mode: mirror
+
+  - label: backup-drive
+    path: /Volumes/Backup/Movies
+    role: backup
+    mode: mirror
+
+  - label: icloud-movies
+    path: ~/Library/Mobile Documents/com~apple~CloudDocs/Movies
+    role: icloud
+    mode: subset
+
+  - label: downloads-inbox
+    path: ~/Downloads
+    role: inbox
+    mode: watch

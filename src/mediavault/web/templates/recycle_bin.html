@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Recycle Bin — MediaVault{% endblock %}
+{% block content %}
+<h1>Recycle Bin</h1>
+
+<h2>MediaVault quarantine</h2>
+<p class="subtle">Duplicates you removed from <a href="/duplicates">Duplicates</a> land here first. Restore them or purge for good.</p>
+<table>
+  <tr><th>Original root</th><th>Original path</th><th>Size</th><th>Quarantined</th><th colspan="2"></th></tr>
+  {% for q in quarantine_items %}
+  <tr>
+    <td>{{ q.original_root }}</td>
+    <td class="path">{{ q.original_rel_path }}</td>
+    <td>{{ q.size|human_bytes }}</td>
+    <td>{{ q.reason }}</td>
+    <td><form method="post" action="/recycle-bin/quarantine/{{ q.id }}/restore"><button>Restore</button></form></td>
+    <td>
+      <form method="post" action="/recycle-bin/quarantine/{{ q.id }}/purge" onsubmit="return confirm('Permanently delete this file? This cannot be undone.');">
+        <input type="hidden" name="confirm" value="yes">
+        <button class="danger">Delete permanently</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="subtle">Quarantine is empty.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>System trash</h2>
+<p class="subtle">Your OS's own Trash/Recycle Bin — often forgotten about and worth checking when reclaiming space. Deleting here is immediate and permanent.</p>
+<form method="post" action="/recycle-bin/empty" onsubmit="return confirm('Permanently delete the selected items? This cannot be undone.');">
+  <table>
+    <tr><th></th><th>Path</th><th>Size</th><th>Location</th></tr>
+    {% for item in trash_items %}
+    <tr>
+      <td><input type="checkbox" name="paths" value="{{ item.path }}"></td>
+      <td class="path">{{ item.path }}</td>
+      <td>{{ item.size|human_bytes }}</td>
+      <td class="path">{{ item.source }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="subtle">Trash is empty (or not accessible from here).</td></tr>
+    {% endfor %}
+  </table>
+  {% if trash_items %}
+  <input type="hidden" name="confirm" value="yes">
+  <button class="danger">Permanently delete selected</button>
+  {% endif %}
+</form>
+{% endblock %}

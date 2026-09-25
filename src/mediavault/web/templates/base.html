@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MediaVault{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="topnav">
+    <a class="brand" href="/">MediaVault</a>
+    <a href="/roots">Roots</a>
+    <a href="/pairs">Sync Pairs</a>
+    <a href="/duplicates">Duplicates</a>
+    <a href="/suggestions">Suggestions</a>
+    <a href="/icloud">iCloud Storage</a>
+    <a href="/recycle-bin">Recycle Bin</a>
+    <a href="/metadata">Metadata</a>
+  </nav>
+  <main>
+    {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

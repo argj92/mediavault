@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Duplicates — MediaVault{% endblock %}
+{% block content %}
+<h1>Duplicates</h1>
+<p class="subtle">{{ groups|length }} duplicate group(s), {{ wasted_bytes|human_bytes }} reclaimable. Removing a copy moves it to <a href="/recycle-bin">quarantine</a> — nothing is deleted outright.</p>
+
+{% for g in groups %}
+<div class="group">
+  <div class="group-head">{{ g.count }} copies &middot; {{ (g.total_size // g.count)|human_bytes }} each &middot; {{ g.wasted_bytes|human_bytes }} wasted</div>
+  <table>
+    <tr><th>Root</th><th>Path</th><th>Size</th><th></th></tr>
+    {% for f in g.files %}
+    <tr>
+      <td>{{ f.root_label }}</td>
+      <td class="path">{{ f.rel_path }}</td>
+      <td>{{ f.size|human_bytes }}</td>
+      <td>
+        <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
+          <input type="hidden" name="root_label" value="{{ f.root_label }}">
+          <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
+          <button class="danger">Quarantine this copy</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="subtle">No duplicates found.</p>
+{% endfor %}
+{% endblock %}
