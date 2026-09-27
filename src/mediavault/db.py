@@ -105,9 +105,19 @@ CREATE TABLE IF NOT EXISTS scans (
 
 @contextmanager
 def connect(db_path: Path):
-    conn = sqlite3.connect(str(db_path))
+    # The background worker (its own connection, on a timer) and web requests
+    # (a connection per request) write from separate threads/connections.
+    # Default rollback-journal mode lets only one writer touch the file at a
+    # time and readers block on it too, so a scan's single long transaction
+    # (one commit at the very end) can easily outlast Python sqlite3's default
+    # 5s busy timeout and surface as "database is locked". WAL lets readers
+    # proceed alongside a writer, and a generous busy_timeout makes a second
+    # writer wait its turn instead of failing immediately.
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     try:
         yield conn
         conn.commit()

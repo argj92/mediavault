@@ -87,6 +87,11 @@ the first time on this machine. It's safe to re-run any time. Then:
 .venv/bin/mediavault gui    # the same UI in a native desktop window
 ```
 
+`mediavault-web` and `mediavault-gui` are also installed as their own
+standalone commands (same options, e.g. `mediavault-web --port 9000`) — handy
+for a Dock/Spotlight/Alfred shortcut or a launchd/systemd unit that shouldn't
+have to know it's really `mediavault web` under the hood.
+
 (`source .venv/bin/activate` first if you'd rather type `mediavault` without
 the `.venv/bin/` prefix.) From here on, add more roots either with
 `mediavault root add ...` or from the Roots section once the UI is running —
