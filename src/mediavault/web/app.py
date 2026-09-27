@@ -4,6 +4,7 @@ ways to launch it.
 """
 from __future__ import annotations
 
+import json
 import platform
 import shutil
 import sqlite3
@@ -12,12 +13,12 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import FastAPI, Form, Request, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import cloud, db, dedupe, metadata, recycle_bin, scheduler, suggestions, sync
+from .. import catalog, cloud, db, dedupe, metadata, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 
 BASE_DIR = Path(__file__).parent
@@ -113,6 +114,9 @@ def index(request: Request, msg: str | None = None):
                 {"root": r, "summary": cloud.storage_summary(p), "largest": cloud.largest_downloaded_files(p, top_n=25)}
             )
 
+        protection_report = protection.compute_protection(conn, config.machine)
+        remote_catalogs = db.list_remote_catalogs(conn)
+
     has_primary = any(r["role"] == "primary" and r["enabled"] for r in roots)
     trash_scan = recycle_bin.scan_trash(top_n=50)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
@@ -141,6 +145,8 @@ def index(request: Request, msg: str | None = None):
             "trash_bytes": trash_scan["total_bytes"],
             "trash_accurate": trash_scan["accurate"],
             "trash_access_errors": trash_scan["access_errors"],
+            "protection_report": protection_report,
+            "remote_catalogs": remote_catalogs,
         },
     )
 
@@ -388,3 +394,45 @@ def metadata_rename(request: Request, file_id: int, new_name: str = Form(...)):
         old_path.rename(new_path)
         conn.execute("UPDATE files SET rel_path=? WHERE id=?", (new_rel, file_id))
     return flash_redirect("#metadata", f"Renamed to '{new_name}'.")
+
+
+# ------------------------------------------------------------------- catalog
+# Cross-machine protection tracking: export this machine's index as a small
+# portable JSON file (hash/size/path/role — never file contents), and import
+# one exported from another machine, so protection.py can tell you which
+# files only exist in one place without both machines being mounted at once.
+
+@app.get("/catalog/export")
+def catalog_export_download(request: Request):
+    config = get_config(request)
+    with get_conn(request) as conn:
+        data = catalog.build_catalog(conn, config.machine)
+    body = json.dumps(data, indent=2)
+    filename = f"{config.machine}-catalog.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/catalog/import")
+async def catalog_import_upload(request: Request, file: UploadFile):
+    config = get_config(request)
+    try:
+        raw = await file.read()
+        data = json.loads(raw)
+        if not isinstance(data, dict) or "machine" not in data or "files" not in data:
+            raise catalog.CatalogError("That file doesn't look like a mediavault catalog.")
+        with get_conn(request) as conn:
+            n = catalog.import_catalog(conn, data, config.machine)
+    except (catalog.CatalogError, ValueError) as exc:
+        return flash_redirect("#protection", str(exc))
+    return flash_redirect("#protection", f"Imported {n} file(s) from '{data['machine']}'.")
+
+
+@app.post("/catalog/{machine}/remove")
+def catalog_remove_route(request: Request, machine: str):
+    with get_conn(request) as conn:
+        db.remove_remote_catalog(conn, machine)
+    return flash_redirect("#protection", f"Removed catalog for '{machine}'.")

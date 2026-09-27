@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import webbrowser
 from pathlib import Path
 from typing import Optional
@@ -9,16 +10,18 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import dedupe, db, recycle_bin, scanner, suggestions, sync
+from . import catalog, dedupe, db, protection, recycle_bin, scanner, suggestions, sync
 from .config import AppConfig, ConfigError, RootConfig, load_config
 
 app = typer.Typer(help="MediaVault — cross-machine movie/TV library manager.")
 root_app = typer.Typer(help="Manage tracked folders (roots) on this machine.")
 trash_app = typer.Typer(help="Inspect and clean up the OS trash / recycle bin.")
 service_app = typer.Typer(help="Run mediavault as an always-on background service (launchd/systemd).")
+catalog_app = typer.Typer(help="Export/import portable per-machine catalogs for cross-machine protection tracking.")
 app.add_typer(root_app, name="root")
 app.add_typer(trash_app, name="trash")
 app.add_typer(service_app, name="service")
+app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 
@@ -236,6 +239,78 @@ def icloud(label: str, top: int = 25):
     for rel, size in cloud.largest_downloaded_files(path, top_n=top):
         table.add_row(rel, _human(size))
     console.print(table)
+
+
+# ------------------------------------------------------------------- protection
+
+@app.command(name="protection")
+def protection_cmd(top: int = 25):
+    """Show files backed by fewer than 2 independent mirror-mode copies —
+    across this machine, and any other machine whose catalog you've
+    imported (see `mediavault catalog`)."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        report = protection.compute_protection(conn, config.machine)
+    console.print(
+        f"{report['covered']}/{report['total_groups']} file(s) have 2+ protective copies. "
+        f"Known machines: {', '.join(report['known_machines']) or '(none imported)'}"
+    )
+    table = Table("Size", "Copies", "Locations")
+    for g in report["at_risk"][:top]:
+        locs = "\n".join(f"{loc['machine']}:{loc['root_label']}/{loc['rel_path']}" for loc in g["locations"])
+        table.add_row(_human(g["size"]), str(g["protective_count"]), locs)
+    console.print(table)
+    if not report["at_risk"]:
+        console.print("[green]Nothing at risk — every file has 2+ protective copies.[/green]")
+
+
+# --------------------------------------------------------------------- catalog
+
+@catalog_app.command("export")
+def catalog_export(out: Path = typer.Option(None, help="default: ./<machine>-catalog.json")):
+    """Dump this machine's index (hash/size/path/role, no file contents) as
+    portable JSON another machine can import for cross-machine protection
+    tracking — no network access, move the file yourself."""
+    config = _load()
+    out = out or Path.cwd() / f"{config.machine}-catalog.json"
+    with db.connect(config.db_path) as conn:
+        n = catalog.export_catalog(conn, config.machine, out)
+    console.print(f"[green]Wrote {n} file(s) to {out}[/green]")
+
+
+@catalog_app.command("import")
+def catalog_import(path: Path):
+    """Import another machine's exported catalog (see `catalog export`)."""
+    config = _load()
+    try:
+        data = catalog.load_catalog_file(path)
+        with db.connect(config.db_path) as conn:
+            n = catalog.import_catalog(conn, data, config.machine)
+    except catalog.CatalogError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Imported {n} file(s) from '{data['machine']}'.[/green]")
+
+
+@catalog_app.command("list")
+def catalog_list():
+    """Show which other machines' catalogs are currently imported."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        rows = db.list_remote_catalogs(conn)
+    table = Table("Machine", "Files", "Imported", "Exported at")
+    for r in rows:
+        table.add_row(r["machine"], str(r["file_count"]), time.strftime("%Y-%m-%d %H:%M", time.localtime(r["imported_at"])), r["exported_at"] or "-")
+    console.print(table)
+
+
+@catalog_app.command("remove")
+def catalog_remove(machine: str):
+    """Remove a previously imported catalog."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        db.remove_remote_catalog(conn, machine)
+    console.print(f"[green]Removed catalog for '{machine}'.[/green]")
 
 
 # ---------------------------------------------------------------------- trash

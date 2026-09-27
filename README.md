@@ -31,6 +31,16 @@ these (click a section to expand/collapse it; the top nav just jumps to one):
   primary automatically. The "easy sync" button copies whatever's missing on
   the mirror side(s); actual deletions and content conflicts always need a
   separate, explicit confirmation shown inline under that root.
+- **Protection** — for every file (by content hash), how many independent
+  `mirror`-mode copies exist — locally, and on any other machine whose
+  portable catalog you've imported (`mediavault catalog export`/`import`, or
+  the Export/Import controls in this section). A `subset`/`watch` copy never
+  counts toward protection. Files backed by only one copy are listed,
+  largest first. Catalogs are a small JSON file (hash/size/path/role — never
+  the media itself) you move between machines yourself (AirDrop, a synced
+  folder, a USB drive) — no network access between machines required, so
+  this works even for a second machine that isn't mounted or on the same
+  network right now.
 - **Duplicates** — identical content (by hash) found anywhere across every
   tracked root. Removing a copy quarantines it (see Recycle Bin) rather than
   deleting it outright.

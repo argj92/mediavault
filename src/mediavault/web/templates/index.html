@@ -141,6 +141,65 @@
   </div>
 </details>
 
+<!-- ==================================================== PROTECTION -->
+<details id="protection" class="section">
+  <summary>Protection <span class="count">{{ protection_report.at_risk|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">For every file (by content hash), how many independent <b>mirror</b>-mode copies exist — locally, and on any other machine whose catalog you've imported below. A <b>subset</b> (e.g. iCloud) or <b>watch</b> copy never counts toward protection — it's not a backup. A file backed by only one copy is at risk.</p>
+
+    <div class="cards">
+      <div class="card"><div class="card-value">{{ protection_report.covered }}/{{ protection_report.total_groups }}</div><div class="card-label">files with 2+ protective copies</div></div>
+      <div class="card {{ 'warn' if protection_report.at_risk else '' }}"><div class="card-value">{{ protection_report.at_risk|length }}</div><div class="card-label">at risk (only 1 copy)</div></div>
+      <div class="card"><div class="card-value">{{ protection_report.known_machines|length }}</div><div class="card-label">known machines</div></div>
+    </div>
+
+    {% if protection_report.at_risk %}
+    <h3>At risk (largest first)</h3>
+    <table>
+      <tr><th>Size</th><th>Copies</th><th>Location(s)</th></tr>
+      {% for g in protection_report.at_risk[:25] %}
+      <tr>
+        <td>{{ g.size|human_bytes }}</td>
+        <td>{{ g.protective_count }}</td>
+        <td class="path">{% for loc in g.locations %}{{ loc.machine }}:{{ loc.root_label }}/{{ loc.rel_path }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="subtle">Nothing at risk — every tracked file has 2+ protective copies.</p>
+    {% endif %}
+
+    <h3>Cross-machine catalogs</h3>
+    <p class="subtle">Export this machine's index as a small JSON file (hash/size/path only — never the media itself), then import it on another machine (or vice versa) to include that machine in the protection count above, without needing both mounted at once.</p>
+    <p>
+      <a href="/catalog/export"><button type="button">Export this machine's catalog</button></a>
+    </p>
+    <form method="post" action="/catalog/import" enctype="multipart/form-data" class="form-grid">
+      <label>Import a catalog file <input type="file" name="file" accept="application/json" required></label>
+      <button>Import</button>
+    </form>
+
+    <table>
+      <tr><th>Machine</th><th>Files</th><th>Imported</th><th>Exported at</th><th></th></tr>
+      {% for c in remote_catalogs %}
+      <tr>
+        <td>{{ c.machine }}</td>
+        <td>{{ c.file_count }}</td>
+        <td>{{ c.imported_at|int }}</td>
+        <td>{{ c.exported_at or "-" }}</td>
+        <td>
+          <form method="post" action="/catalog/{{ c.machine }}/remove" onsubmit="return confirm('Remove the imported catalog for {{ c.machine }}?');">
+            <button class="danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="subtle">No other machines' catalogs imported yet.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</details>
+
 <!-- ======================================================= DUPLICATES -->
 <details id="duplicates" class="section">
   <summary>Duplicates <span class="count">{{ dup_groups|length }}</span></summary>

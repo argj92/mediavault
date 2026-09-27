@@ -26,6 +26,29 @@ CREATE TABLE IF NOT EXISTS worker_state (
     value TEXT NOT NULL
 );
 
+-- A snapshot of another machine's index, imported from a portable JSON
+-- catalog (see catalog.py) so cross-machine "how many protective copies
+-- does this file have" can be computed without both machines being mounted
+-- at once. Re-importing the same machine name replaces its old snapshot.
+CREATE TABLE IF NOT EXISTS remote_catalogs (
+    machine TEXT PRIMARY KEY,
+    imported_at REAL NOT NULL,
+    exported_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS remote_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine TEXT NOT NULL REFERENCES remote_catalogs(machine) ON DELETE CASCADE,
+    root_label TEXT NOT NULL,
+    role TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    size INTEGER,
+    hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_remote_files_hash ON remote_files(hash);
+CREATE INDEX IF NOT EXISTS idx_remote_files_machine ON remote_files(machine);
+
 CREATE TABLE IF NOT EXISTS quarantine (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     original_root TEXT NOT NULL,
@@ -155,6 +178,38 @@ def syncable_roots(conn: sqlite3.Connection, exclude_label: str) -> list[sqlite3
         "SELECT * FROM roots WHERE enabled=1 AND label != ? AND mode IN ('mirror', 'subset') ORDER BY label",
         (exclude_label,),
     ).fetchall()
+
+
+def save_remote_catalog(conn: sqlite3.Connection, machine: str, exported_at: str | None, files: list[dict]) -> None:
+    """Replaces any previous snapshot for this machine name with a fresh one."""
+    conn.execute("DELETE FROM remote_files WHERE machine=?", (machine,))
+    conn.execute(
+        """INSERT INTO remote_catalogs (machine, imported_at, exported_at) VALUES (?, ?, ?)
+           ON CONFLICT(machine) DO UPDATE SET imported_at=excluded.imported_at, exported_at=excluded.exported_at""",
+        (machine, time.time(), exported_at),
+    )
+    conn.executemany(
+        """INSERT INTO remote_files (machine, root_label, role, mode, rel_path, size, hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (machine, f["root_label"], f["role"], f["mode"], f["rel_path"], f.get("size"), f.get("hash"))
+            for f in files
+            if f.get("hash")
+        ],
+    )
+
+
+def list_remote_catalogs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        """SELECT rc.*, COUNT(rf.id) as file_count FROM remote_catalogs rc
+           LEFT JOIN remote_files rf ON rf.machine = rc.machine
+           GROUP BY rc.machine ORDER BY rc.machine"""
+    ).fetchall()
+
+
+def remove_remote_catalog(conn: sqlite3.Connection, machine: str) -> None:
+    conn.execute("DELETE FROM remote_files WHERE machine=?", (machine,))
+    conn.execute("DELETE FROM remote_catalogs WHERE machine=?", (machine,))
 
 
 def get_worker_state(conn: sqlite3.Connection, key: str, default=None):
