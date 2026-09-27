@@ -38,12 +38,13 @@ class RootConfig:
 
 @dataclass
 class AppConfig:
-    """Machine-level settings only. Which folders (roots) and which pairs of
-    them should sync is *runtime* state stored in SQLite (see db.py) so it can
-    be managed live from the CLI or the web/desktop UI without editing YAML
-    by hand — config.yaml just bootstraps a fresh machine and holds settings
-    that are inherently local to it (where the index db lives, which hasher
-    to use, the TMDB key's env var name)."""
+    """Machine-level settings only. Which folders (roots) are tracked, and
+    which one is the primary basis the others sync against, is *runtime*
+    state stored in SQLite (see db.py) so it can be managed live from the
+    CLI or the web/desktop UI without editing YAML by hand — config.yaml
+    just bootstraps a fresh machine and holds settings that are inherently
+    local to it (where the index db lives, which hasher to use, the TMDB
+    key's env var name)."""
 
     machine: str
     db_path: Path

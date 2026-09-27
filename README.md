@@ -9,21 +9,28 @@ shared between machines; each machine keeps its own local index and config.
 
 ## How it's organized
 
+The web/desktop UI is a single page with a collapsible section for each of
+these (click a section to expand/collapse it; the top nav just jumps to one):
+
 - **Roots** — any folder a machine tracks. Each has a `role` (primary,
-  backup, icloud, inbox) and a `mode`:
+  backup, icloud, inbox) and a `mode`. **Exactly one root should be
+  `primary`** — that's the single basis every other root is compared
+  against automatically (no manual pairing to set up):
   - `mirror` — a full backup copy. Missing files here are real deletion
     candidates (always confirmed manually, never auto-applied) and this root
-    is always kept filled with everything from its sync partner.
+    is always kept filled with everything from the primary.
   - `subset` — intentionally holds only *part* of the library (e.g. an
     iCloud Drive folder you've deliberately kept smaller than the full
     library to save space). Never auto-filled, never a deletion source —
     "not here" is just its normal state.
   - `watch` — scanned for duplicates/suggestions but never synced at all
     (e.g. a Downloads folder).
-- **Sync pairs** — two roots you want kept in sync with each other. The
-  "easy sync" button copies whatever's missing on the mirror side(s); actual
-  deletions and content conflicts always need a separate, explicit
-  confirmation on the pair's detail page.
+  When adding a root, use the **Browse…** button (macOS/Linux) to pick the
+  folder in a native dialog instead of typing the path.
+- **Sync** — every non-primary `mirror`/`subset` root, shown against the
+  primary automatically. The "easy sync" button copies whatever's missing on
+  the mirror side(s); actual deletions and content conflicts always need a
+  separate, explicit confirmation shown inline under that root.
 - **Duplicates** — identical content (by hash) found anywhere across every
   tracked root. Removing a copy quarantines it (see Recycle Bin) rather than
   deleting it outright.
@@ -42,33 +49,50 @@ shared between machines; each machine keeps its own local index and config.
 All of this runs automatically once the app is up: a full rescan happens at
 startup and then on an interval (`scan_interval_minutes` in config.yaml),
 recomputing duplicates and sync status and firing a desktop notification
-whenever something *changes* (new duplicates, a pair going out of sync, new
-untracked media) — not on every tick.
+whenever something *changes* (new duplicates, a root drifting out of sync
+with the primary, new untracked media) — not on every tick.
 
 ## Setup on a new machine
 
 ```bash
 git clone <your-private-repo-url> mediavault
 cd mediavault
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[gui]"   # drop [gui] if you only want the web UI
-mediavault init
-mediavault root add primary-library /path/to/your/movies --role primary --mode mirror
+./scripts/setup.sh
 ```
 
-`mediavault init` writes a fresh `config.yaml` (git-ignored — every machine
-has its own) and initializes this machine's local SQLite index. From there,
-add more roots either with `mediavault root add ...` or from the Roots page
-once the UI is running.
+That one script finds (or installs, via Homebrew) a Python 3.10+ interpreter,
+creates the venv, installs mediavault, and runs `mediavault init` if this is
+the first time on this machine. It's safe to re-run any time. Then:
 
 ```bash
-mediavault web    # local web UI, http://127.0.0.1:8420 by default
-mediavault gui    # the same UI in a native desktop window (needs the [gui] extra)
+.venv/bin/mediavault root add primary-library /path/to/your/movies --role primary --mode mirror
+.venv/bin/mediavault web    # local web UI, http://127.0.0.1:8420 by default
+.venv/bin/mediavault gui    # the same UI in a native desktop window
 ```
 
-Everything else (root management, sync pairs, duplicates, metadata renames,
-the recycle bin) is available from either UI, and the same operations are
-also available from the CLI for scripting — run `mediavault --help`.
+(`source .venv/bin/activate` first if you'd rather type `mediavault` without
+the `.venv/bin/` prefix.) From here on, add more roots either with
+`mediavault root add ...` or from the Roots section once the UI is running —
+the Add Root form's **Browse…** button opens a native folder picker.
+
+Everything (root management, sync, duplicates, metadata renames, the
+recycle bin) is available from either UI, and the same operations are also
+available from the CLI for scripting — run `mediavault --help`.
+
+### Keeping it running in the background
+
+By default mediavault only scans/syncs/notifies while `mediavault web` or
+`gui` is actually running. To have it run continuously (survives reboots,
+restarts itself if it crashes):
+
+```bash
+.venv/bin/mediavault service install   # launchd on macOS, systemd --user on Linux
+.venv/bin/mediavault service status
+.venv/bin/mediavault service uninstall # fully reverses it
+```
+
+This is a real, persistent system change (an auto-start-at-login background
+process) — it's opt-in and not part of the base setup.
 
 ### TMDB lookups (optional)
 

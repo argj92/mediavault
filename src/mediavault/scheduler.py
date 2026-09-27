@@ -1,8 +1,8 @@
 """Keeps the local index fresh without the user having to remember to run
 anything: a full reconcile always runs once at process startup, and then a
 background thread reruns it on an interval, notifying only when something
-actually changed (new duplicates, a pair going out of sync, new untracked
-media) rather than on every tick.
+actually changed (new duplicates, a root drifting out of sync with the
+primary, new untracked media) rather than on every tick.
 """
 from __future__ import annotations
 
@@ -18,8 +18,9 @@ log = logging.getLogger("mediavault.scheduler")
 
 
 def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
-    """Rescans every enabled root, recomputes duplicate groups and sync-pair
-    status, and looks for untracked inbox media. Returns a summary dict."""
+    """Rescans every enabled root, recomputes duplicate groups and each
+    root's sync status against the primary, and looks for untracked inbox
+    media. Returns a summary dict."""
     scan_errors = []
     for row in db.list_roots(conn, enabled_only=True):
         root = RootConfig.from_row(row)
@@ -35,18 +36,9 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
 
     dup_groups = dedupe.find_duplicates(conn)
 
-    pair_summaries = []
-    for pair in db.list_sync_pairs(conn):
-        if not pair["enabled"]:
-            continue
-        root_a_row = db.get_root(conn, pair["root_a"])
-        root_b_row = db.get_root(conn, pair["root_b"])
-        if root_a_row is None or root_b_row is None:
-            continue
-        plan = sync.plan_sync(conn, RootConfig.from_row(root_a_row), RootConfig.from_row(root_b_row))
-        status = "out_of_sync" if plan.out_of_sync else "in_sync"
-        db.update_pair_status(conn, pair["id"], status)
-        pair_summaries.append({"id": pair["id"], "a": pair["root_a"], "b": pair["root_b"], **plan.summary()})
+    status_summaries = [
+        {"label": s["root"].label, **s["plan"].summary()} for s in sync.sync_status_for_all(conn)
+    ]
 
     untracked = suggestions.untracked_media(conn, config.video_extensions)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
@@ -55,7 +47,7 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
         "scan_errors": scan_errors,
         "duplicate_groups": len(dup_groups),
         "wasted_bytes": dedupe.total_wasted_bytes(dup_groups),
-        "pairs": pair_summaries,
+        "sync_status": status_summaries,
         "untracked_count": len(new_untracked),
     }
 
@@ -70,18 +62,18 @@ def notify_on_changes(conn: sqlite3.Connection, summary: dict) -> None:
         )
     db.set_worker_state(conn, "last_notified_duplicate_groups", summary["duplicate_groups"])
 
-    last_pair_status: dict = db.get_worker_state(conn, "last_pair_status", {})
-    new_pair_status = {}
-    for p in summary["pairs"]:
-        key = str(p["id"])
-        new_pair_status[key] = p["out_of_sync"]
-        if p["out_of_sync"] and not last_pair_status.get(key, False):
+    last_sync_status: dict = db.get_worker_state(conn, "last_sync_status", {})
+    new_sync_status = {}
+    for s in summary["sync_status"]:
+        key = s["label"]
+        new_sync_status[key] = s["out_of_sync"]
+        if s["out_of_sync"] and not last_sync_status.get(key, False):
             notify.notify(
-                "MediaVault — sync pair out of sync",
-                f"{p['a']} <-> {p['b']}: {p['copy_to_a'] + p['copy_to_b']} file(s) to copy, "
-                f"{p['delete_from_a'] + p['delete_from_b']} deletion(s) need review.",
+                "MediaVault — out of sync with primary",
+                f"{s['label']}: {s['copy_to_a'] + s['copy_to_b']} file(s) to copy, "
+                f"{s['delete_from_a'] + s['delete_from_b']} deletion(s) need review.",
             )
-    db.set_worker_state(conn, "last_pair_status", new_pair_status)
+    db.set_worker_state(conn, "last_sync_status", new_sync_status)
 
     last_untracked = db.get_worker_state(conn, "last_notified_untracked", 0)
     if summary["untracked_count"] > last_untracked:

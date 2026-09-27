@@ -17,6 +17,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import db
 from .config import RootConfig
 
 RSYNC_PATH = shutil.which("rsync")
@@ -150,4 +151,20 @@ def execute_sync(
             except Exception as exc:  # noqa: BLE001
                 results["errors"].append(f"delete_from_b {rel}: {exc}")
 
+    return results
+
+
+def sync_status_for_all(conn) -> list[dict]:
+    """The single-basis model: one root is marked `primary`, and every other
+    mirror/subset root is compared against it automatically — no manual
+    pairing. Returns [] if no primary root is configured yet."""
+    primary_row = db.get_primary_root(conn)
+    if primary_row is None:
+        return []
+    primary = RootConfig.from_row(primary_row)
+    results = []
+    for row in db.syncable_roots(conn, exclude_label=primary.label):
+        other = RootConfig.from_row(row)
+        plan = plan_sync(conn, primary, other)
+        results.append({"primary": primary, "root": other, "plan": plan})
     return results

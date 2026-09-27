@@ -21,17 +21,6 @@ CREATE TABLE IF NOT EXISTS roots (
     created_at REAL NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS sync_pairs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    root_a TEXT NOT NULL,
-    root_b TEXT NOT NULL,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'unknown',
-    last_checked_at REAL,
-    last_synced_at REAL,
-    UNIQUE(root_a, root_b)
-);
-
 CREATE TABLE IF NOT EXISTS worker_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -105,6 +94,9 @@ def connect(db_path: Path):
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Migration: sync_pairs (manual pairwise wiring) was replaced by a single
+    # primary-root basis that every other root syncs against automatically.
+    conn.execute("DROP TABLE IF EXISTS sync_pairs")
 
 
 def upsert_root(conn: sqlite3.Connection, label: str, path: str, role: str, mode: str, enabled: bool = True) -> None:
@@ -134,45 +126,35 @@ def set_root_enabled(conn: sqlite3.Connection, label: str, enabled: bool) -> Non
 def remove_root(conn: sqlite3.Connection, label: str) -> None:
     conn.execute("DELETE FROM files WHERE root_label=?", (label,))
     conn.execute("DELETE FROM scans WHERE root_label=?", (label,))
-    conn.execute("DELETE FROM sync_pairs WHERE root_a=? OR root_b=?", (label, label))
     conn.execute("DELETE FROM roots WHERE label=?", (label,))
 
 
-def add_sync_pair(conn: sqlite3.Connection, root_a: str, root_b: str) -> int:
-    cur = conn.execute(
-        """INSERT INTO sync_pairs (root_a, root_b, enabled, status) VALUES (?, ?, 1, 'unknown')
-           ON CONFLICT(root_a, root_b) DO UPDATE SET enabled=1""",
-        (root_a, root_b),
-    )
-    row = conn.execute(
-        "SELECT id FROM sync_pairs WHERE root_a=? AND root_b=?", (root_a, root_b)
+def get_primary_root(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The single basis every other root syncs against. There's meant to be
+    at most one — add_root/upsert_root callers should check
+    count_primary_roots() first and refuse a second one."""
+    return conn.execute(
+        "SELECT * FROM roots WHERE role='primary' AND enabled=1 ORDER BY created_at LIMIT 1"
     ).fetchone()
-    return row["id"]
 
 
-def list_sync_pairs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return conn.execute("SELECT * FROM sync_pairs ORDER BY id").fetchall()
+def count_primary_roots(conn: sqlite3.Connection, exclude_label: str | None = None) -> int:
+    q = "SELECT COUNT(*) as n FROM roots WHERE role='primary' AND enabled=1"
+    params: list = []
+    if exclude_label:
+        q += " AND label != ?"
+        params.append(exclude_label)
+    return conn.execute(q, params).fetchone()["n"]
 
 
-def get_sync_pair(conn: sqlite3.Connection, pair_id: int) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM sync_pairs WHERE id=?", (pair_id,)).fetchone()
-
-
-def remove_sync_pair(conn: sqlite3.Connection, pair_id: int) -> None:
-    conn.execute("DELETE FROM sync_pairs WHERE id=?", (pair_id,))
-
-
-def update_pair_status(conn: sqlite3.Connection, pair_id: int, status: str, synced: bool = False) -> None:
-    now = time.time()
-    if synced:
-        conn.execute(
-            "UPDATE sync_pairs SET status=?, last_checked_at=?, last_synced_at=? WHERE id=?",
-            (status, now, now, pair_id),
-        )
-    else:
-        conn.execute(
-            "UPDATE sync_pairs SET status=?, last_checked_at=? WHERE id=?", (status, now, pair_id)
-        )
+def syncable_roots(conn: sqlite3.Connection, exclude_label: str) -> list[sqlite3.Row]:
+    """Every other enabled root that should be compared against the primary
+    (mirror = full backup, subset = intentionally partial). `watch`-mode
+    roots (inbox folders) are never sync targets."""
+    return conn.execute(
+        "SELECT * FROM roots WHERE enabled=1 AND label != ? AND mode IN ('mirror', 'subset') ORDER BY label",
+        (exclude_label,),
+    ).fetchall()
 
 
 def get_worker_state(conn: sqlite3.Connection, key: str, default=None):

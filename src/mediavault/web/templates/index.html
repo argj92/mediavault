@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% block title %}{{ machine }} — MediaVault{% endblock %}
+{% block content %}
+<h1>{{ machine }}</h1>
+<p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-value">{{ roots|length }}</div>
+    <div class="card-label">tracked roots</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ total_files }}</div>
+    <div class="card-label">files indexed ({{ total_bytes|human_bytes }})</div>
+  </div>
+  <div class="card {{ 'warn' if dup_groups else '' }}">
+    <div class="card-value">{{ dup_groups|length }}</div>
+    <div class="card-label">duplicate groups ({{ wasted_bytes|human_bytes }} reclaimable)</div>
+  </div>
+  <div class="card {{ 'warn' if untracked_count else '' }}">
+    <div class="card-value">{{ untracked_count }}</div>
+    <div class="card-label">untracked media in inbox</div>
+  </div>
+  <div class="card">
+    <div class="card-value">{{ quarantine_count }}</div>
+    <div class="card-label">items in quarantine</div>
+  </div>
+  <div class="card {{ '' if trash_accurate else 'warn' }}">
+    <div class="card-value">{{ trash_bytes|human_bytes }}{{ '' if trash_accurate else '+' }}</div>
+    <div class="card-label">{{ 'in system trash' if trash_accurate else 'in system trash (permission-limited)' }}</div>
+  </div>
+</div>
+
+<!-- ============================================================ ROOTS -->
+<details id="roots" open class="section">
+  <summary>Roots <span class="count">{{ roots|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">A root is any folder this machine tracks. Exactly one root should be <b>primary</b> — the single basis every other root syncs against. Mark a folder <b>subset</b> (like an iCloud folder that only holds part of your library) so it's never treated as a deletion source, or <b>mirror</b> for a full backup copy.</p>
+
+    <table>
+      <tr><th>Label</th><th>Role</th><th>Mode</th><th>Path</th><th>Enabled</th><th colspan="3">Actions</th></tr>
+      {% for r in roots %}
+      <tr>
+        <td>{{ r.label }}{% if r.role == 'primary' %} <span class="pill ok">basis</span>{% endif %}</td>
+        <td>{{ r.role }}</td>
+        <td>{{ r.mode }}</td>
+        <td class="path">{{ r.path }}</td>
+        <td>{{ "yes" if r.enabled else "no" }}</td>
+        <td><form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form></td>
+        <td><form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form></td>
+        <td>
+          <form method="post" action="/roots/{{ r.label }}/delete" onsubmit="return confirm('Remove {{ r.label }} from tracking? Files on disk are not touched.');">
+            <input type="hidden" name="confirm" value="yes">
+            <button class="danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="subtle">No roots yet — add one below.</td></tr>
+      {% endfor %}
+    </table>
+
+    <h3>Add a root</h3>
+    <form method="post" action="/roots/add" class="form-grid">
+      <label>Label <input name="label" required placeholder="e.g. backup-drive"></label>
+      <label>Path
+        <div class="path-row">
+          <input name="path" id="new-root-path" required placeholder="/Volumes/Backup/Movies">
+          <button type="button" id="browse-btn">Browse…</button>
+        </div>
+      </label>
+      <label>Role
+        <select name="role">
+          <option value="primary">primary — the single basis</option>
+          <option value="backup">backup — syncs against primary</option>
+          <option value="icloud">icloud — cloud folder, partial locally</option>
+          <option value="inbox">inbox — watch for new media, not synced</option>
+        </select>
+      </label>
+      <label>Mode
+        <select name="mode">
+          <option value="mirror">mirror — full two-way backup</option>
+          <option value="subset">subset — intentionally partial, never a deletion source</option>
+          <option value="watch">watch — scanned only, not synced</option>
+        </select>
+      </label>
+      <button>Add root</button>
+    </form>
+  </div>
+</details>
+
+<!-- ============================================================= SYNC -->
+<details id="sync" open class="section">
+  <summary>Sync <span class="count">{{ sync_statuses|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Every non-primary <b>mirror</b>/<b>subset</b> root is compared against the single primary root automatically — no manual pairing. "Sync now" copies anything missing on the mirror side(s) — it never auto-fills a <b>subset</b>/<b>watch</b> root (e.g. a storage-limited iCloud folder) and never deletes anything; deletions and conflicts always need a manual review below.</p>
+
+    {% if not has_primary %}
+    <p class="subtle">No primary root configured yet — mark one root <b>primary</b> under Roots above to enable sync.</p>
+    {% elif not sync_statuses %}
+    <p class="subtle">No other mirror/subset roots to sync against the primary yet.</p>
+    {% endif %}
+
+    {% for s in sync_statuses %}
+    <div class="group">
+      <div class="group-head">
+        {{ s.root.label }}
+        <span class="pill {{ 'ok' if not s.plan.out_of_sync else 'warn' }}">{{ 'in sync' if not s.plan.out_of_sync else 'out of sync' }}</span>
+      </div>
+      <div class="cards">
+        <div class="card"><div class="card-value">{{ s.plan.in_sync }}</div><div class="card-label">in sync</div></div>
+        <div class="card"><div class="card-value">{{ s.plan.copy_to_a|length + s.plan.copy_to_b|length }}</div><div class="card-label">to copy</div></div>
+        <div class="card {{ 'warn' if s.plan.conflicts else '' }}"><div class="card-value">{{ s.plan.conflicts|length }}</div><div class="card-label">conflicts</div></div>
+        <div class="card {{ 'warn' if s.plan.delete_from_a or s.plan.delete_from_b else '' }}"><div class="card-value">{{ s.plan.delete_from_a|length + s.plan.delete_from_b|length }}</div><div class="card-label">deletion candidates</div></div>
+        <div class="card"><div class="card-value">{{ s.plan.unverifiable|length }}</div><div class="card-label">cloud placeholder</div></div>
+      </div>
+      <form method="post" action="/sync/{{ s.root.label }}"><button>Sync now (copies only, safe)</button></form>
+
+      {% if s.plan.delete_from_a or s.plan.delete_from_b or s.plan.conflicts %}
+      <details class="subsection">
+        <summary>Needs review ({{ s.plan.delete_from_a|length + s.plan.delete_from_b|length + s.plan.conflicts|length }})</summary>
+        {% if s.plan.delete_from_a or s.plan.delete_from_b %}
+        <p class="subtle">These files disappeared from one mirror side. Confirm to also remove them from the other side — this is irreversible.</p>
+        <ul>
+          {% for rel in s.plan.delete_from_a %}<li>remove from <b>primary</b>: {{ rel }}</li>{% endfor %}
+          {% for rel in s.plan.delete_from_b %}<li>remove from <b>{{ s.root.label }}</b>: {{ rel }}</li>{% endfor %}
+        </ul>
+        <form method="post" action="/sync/{{ s.root.label }}/apply-deletes" onsubmit="return confirm('Permanently delete these files from the side(s) listed above?');">
+          <input type="hidden" name="confirm" value="yes">
+          <button class="danger">Apply deletions</button>
+        </form>
+        {% endif %}
+        {% if s.plan.conflicts %}
+        <p class="subtle">Same path, different content on each side. Resolve manually — mediavault won't guess which is right.</p>
+        <ul>{% for rel in s.plan.conflicts %}<li>{{ rel }}</li>{% endfor %}</ul>
+        {% endif %}
+      </details>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</details>
+
+<!-- ======================================================= DUPLICATES -->
+<details id="duplicates" class="section">
+  <summary>Duplicates <span class="count">{{ dup_groups|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">{{ dup_groups|length }} duplicate group(s), {{ wasted_bytes|human_bytes }} reclaimable. Removing a copy moves it to <a href="#recycle-bin">quarantine</a> — nothing is deleted outright.</p>
+
+    {% for g in dup_groups %}
+    <div class="group">
+      <div class="group-head">{{ g.count }} copies &middot; {{ (g.total_size // g.count)|human_bytes }} each &middot; {{ g.wasted_bytes|human_bytes }} wasted</div>
+      <table>
+        <tr><th>Root</th><th>Path</th><th>Size</th><th></th></tr>
+        {% for f in g.files %}
+        <tr>
+          <td>{{ f.root_label }}</td>
+          <td class="path">{{ f.rel_path }}</td>
+          <td>{{ f.size|human_bytes }}</td>
+          <td>
+            <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
+              <input type="hidden" name="root_label" value="{{ f.root_label }}">
+              <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
+              <button class="danger">Quarantine this copy</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% else %}
+    <p class="subtle">No duplicates found.</p>
+    {% endfor %}
+  </div>
+</details>
+
+<!-- ====================================================== SUGGESTIONS -->
+<details id="suggestions" class="section">
+  <summary>Suggestions <span class="count">{{ untracked_count }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Media sitting in your inbox folders (e.g. Downloads) that isn't tracked in any library root yet.</p>
+    <table>
+      <tr><th>Inbox root</th><th>Path</th><th>Size</th><th>Status</th></tr>
+      {% for item in untracked_items %}
+      <tr>
+        <td>{{ item.root_label }}</td>
+        <td class="path">{{ item.rel_path }}</td>
+        <td>{{ item.size|human_bytes }}</td>
+        <td>
+          {% if item.already_in_library %}
+            <span class="pill ok">already in library (dup)</span>
+          {% else %}
+            <span class="pill warn">not tracked — consider filing into a library root</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="subtle">Nothing found. Add an "inbox" root under Roots to enable this.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</details>
+
+<!-- =========================================================== ICLOUD -->
+<details id="icloud" class="section">
+  <summary>iCloud Storage <span class="count">{{ icloud_summaries|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">For each root marked <b>icloud</b>: how much is downloaded locally right now vs. left as cloud-only placeholders, and the largest local files — safe candidates to evict (Finder &rarr; Remove Download) to reclaim disk space, since the content stays in the cloud copy.</p>
+
+    {% for s in icloud_summaries %}
+    <h3>{{ s.root.label }}</h3>
+    {% if s.error %}
+    <p class="subtle">{{ s.error }}</p>
+    {% else %}
+    <div class="cards">
+      <div class="card"><div class="card-value">{{ s.summary.downloaded_count }}</div><div class="card-label">downloaded locally</div></div>
+      <div class="card"><div class="card-value">{{ s.summary.placeholder_count }}</div><div class="card-label">cloud-only placeholders</div></div>
+      <div class="card"><div class="card-value">{{ s.summary.downloaded_bytes|human_bytes }}</div><div class="card-label">local disk used here</div></div>
+    </div>
+    <table>
+      <tr><th>Path</th><th>Size</th></tr>
+      {% for rel_path, size in s.largest %}
+      <tr><td class="path">{{ rel_path }}</td><td>{{ size|human_bytes }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% else %}
+    <p class="subtle">No roots marked "icloud" yet. Add one under Roots above.</p>
+    {% endfor %}
+  </div>
+</details>
+
+<!-- ======================================================= RECYCLE BIN -->
+<details id="recycle-bin" class="section">
+  <summary>Recycle Bin <span class="count">{{ quarantine_count }}</span></summary>
+  <div class="section-body">
+    <h3>MediaVault quarantine</h3>
+    <p class="subtle">Duplicates you removed from Duplicates land here first. Restore them or purge for good.</p>
+    <table>
+      <tr><th>Original root</th><th>Original path</th><th>Size</th><th>Quarantined</th><th colspan="2"></th></tr>
+      {% for q in quarantine_items %}
+      <tr>
+        <td>{{ q.original_root }}</td>
+        <td class="path">{{ q.original_rel_path }}</td>
+        <td>{{ q.size|human_bytes }}</td>
+        <td>{{ q.reason }}</td>
+        <td><form method="post" action="/recycle-bin/quarantine/{{ q.id }}/restore"><button>Restore</button></form></td>
+        <td>
+          <form method="post" action="/recycle-bin/quarantine/{{ q.id }}/purge" onsubmit="return confirm('Permanently delete this file? This cannot be undone.');">
+            <input type="hidden" name="confirm" value="yes">
+            <button class="danger">Delete permanently</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="subtle">Quarantine is empty.</td></tr>
+      {% endfor %}
+    </table>
+
+    <h3>System trash</h3>
+    <p class="subtle">Your OS's own Trash/Recycle Bin — often forgotten about and worth checking when reclaiming space. Deleting here is immediate and permanent.</p>
+
+    {% if not trash_accurate %}
+    <div class="flash warn-flash">
+      <b>This list is incomplete — mediavault can't fully read your Trash.</b>
+      {% for err in trash_access_errors %}<br>&middot; {{ err.location }}: {{ err.error }}{% endfor %}
+      <br><br>
+      On macOS: <b>System Settings &rarr; Privacy &amp; Security &rarr; Full Disk Access</b> &rarr; enable it for
+      whichever app/terminal runs mediavault, then reload this page. Until then, any total shown here is a
+      <b>floor</b>, not the real size — there's more in there than mediavault can see.
+    </div>
+    {% endif %}
+
+    <form method="post" action="/recycle-bin/empty" onsubmit="return confirm('Permanently delete the selected items? This cannot be undone.');">
+      <table>
+        <tr><th></th><th>Path</th><th>Size</th><th>Location</th></tr>
+        {% for item in trash_items %}
+        <tr>
+          <td><input type="checkbox" name="paths" value="{{ item.path }}"></td>
+          <td class="path">{{ item.path }}</td>
+          <td>{{ item.size|human_bytes }}</td>
+          <td class="path">{{ item.source }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="subtle">{{ "Nothing readable here right now — see the warning above." if not trash_accurate else "Trash is empty." }}</td></tr>
+        {% endfor %}
+      </table>
+      {% if trash_items %}
+      <input type="hidden" name="confirm" value="yes">
+      <button class="danger">Permanently delete selected</button>
+      {% endif %}
+    </form>
+  </div>
+</details>
+
+<!-- ========================================================== METADATA -->
+<details id="metadata" class="section">
+  <summary>Metadata <span class="count">{{ metadata_files|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Files with no guessed title/year yet. "Guess" parses the filename (and confirms against TMDB if TMDB_API_KEY is set), then you can rename to the suggested standard name.</p>
+    <table>
+      <tr><th>Root</th><th>Path</th><th colspan="2"></th></tr>
+      {% for f in metadata_files %}
+      <tr>
+        <td>{{ f.root_label }}</td>
+        <td class="path">{{ f.rel_path }}</td>
+        <td><form method="post" action="/metadata/{{ f.id }}/enrich"><button>Guess title/year</button></form></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="subtle">Nothing left to guess — every tracked file already has a title/year.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</details>
+
+<script>
+document.getElementById('browse-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('browse-btn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Waiting for Finder…';
+  try {
+    const res = await fetch('/roots/pick-folder', {method: 'POST'});
+    const data = await res.json();
+    if (data.path) {
+      document.getElementById('new-root-path').value = data.path;
+    } else if (data.error) {
+      alert(data.error);
+    }
+  } catch (e) {
+    alert('Could not open folder picker: ' + e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+</script>
+{% endblock %}

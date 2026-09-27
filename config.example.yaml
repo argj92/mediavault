@@ -26,19 +26,23 @@ video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts"]
 # once at startup so the local index is fresh before you look at anything.
 scan_interval_minutes: 15
 
-# Folders and sync pairs themselves are NOT configured here — they're live
-# state kept in this machine's SQLite index (db_path above) so you can add,
-# edit, or remove them from the CLI or the web/desktop UI without editing
-# YAML or restarting anything. See `mediavault root --help` and
-# `mediavault pair --help`, or the Roots / Sync pages in the UI.
+# Folders themselves are NOT configured here — they're live state kept in
+# this machine's SQLite index (db_path above) so you can add, edit, or
+# remove them from the CLI or the web/desktop UI without editing YAML or
+# restarting anything. See `mediavault root --help`, or the Roots section
+# in the UI (its "Browse…" button opens a native folder picker).
+#
+# Exactly one root should be role=primary — that's the single basis every
+# other mirror/subset root is compared against automatically under the Sync
+# section. There's no manual pairing to set up.
 #
 # The `roots:` block below is optional and only used ONCE, the first time
 # `mediavault init` runs on a fresh machine, to seed its index. Delete it (or
 # leave it out) once you're managing roots through the UI/CLI instead.
 #
 # role:
-#   primary  - a full, authoritative copy of your library
-#   backup   - another full copy meant to mirror a primary
+#   primary  - the single basis: a full, authoritative copy of your library
+#   backup   - another full copy meant to mirror the primary
 #   icloud   - a folder backed by iCloud Drive (or similar) that may only
 #              hold a SUBSET of files locally at any time (placeholders for
 #              the rest). Never treated as a deletion source.
