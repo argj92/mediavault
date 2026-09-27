@@ -96,6 +96,8 @@ def index(request: Request, msg: str | None = None):
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
         dup_groups = dedupe.find_duplicates(conn)
         sync_statuses = sync.sync_status_for_all(conn)
+        promote_candidates = sync.promotion_candidates(conn)
+        ignored_promotions = db.list_ignored_promotions(conn)
         untracked = suggestions.untracked_media(conn, config.video_extensions)
         quarantine_items = db.list_quarantine(conn)
         metadata_files = conn.execute(
@@ -157,6 +159,8 @@ def index(request: Request, msg: str | None = None):
             "protection_report": protection_report,
             "remote_catalogs": remote_catalogs,
             "library_roots": library_roots,
+            "promote_candidates": promote_candidates,
+            "ignored_promotions": ignored_promotions,
         },
     )
 
@@ -283,9 +287,11 @@ def roots_delete(request: Request, label: str, confirm: str = Form(...)):
 
 @app.post("/sync/{label}")
 def sync_root(request: Request, label: str):
-    """The 'easy sync' button: copies whatever's missing on either side
-    between the primary and this root. Never deletes anything — deletions/
-    conflicts are reviewed separately."""
+    """The 'easy sync' button: fills this backup/subset root with whatever's
+    missing that primary already has. Never deletes anything, and never
+    pulls content the other way (backup-only files into primary) -- that's
+    the Promote section's job, reviewed explicitly instead of bundled in
+    here."""
     config = get_config(request)
     with get_conn(request) as conn:
         primary_row = db.get_primary_root(conn)
@@ -297,18 +303,21 @@ def sync_root(request: Request, label: str):
             return flash_redirect("#sync", f"No such root '{label}'.")
         other = RootConfig.from_row(other_row)
 
-        plan = sync.plan_sync(conn, primary, other)
-        results = sync.execute_sync(primary, other, plan, apply_deletes=False)
+        ignored = db.ignored_promotion_paths(conn)
+        plan = sync.plan_sync(conn, primary, other, ignored_promotions=ignored)
+        results = sync.execute_sync(primary, other, plan, apply_deletes=False, apply_promotions=False)
 
         from .. import scanner
 
         scanner.scan_root(conn, primary, hash_algo=config.hash_algo)
         scanner.scan_root(conn, other, hash_algo=config.hash_algo)
-        new_plan = sync.plan_sync(conn, primary, other)
+        new_plan = sync.plan_sync(conn, primary, other, ignored_promotions=ignored)
 
-    msg = f"{label}: copied {results['copied_to_a']} to primary, {results['copied_to_b']} to {label}."
+    msg = f"{label}: copied {results['copied_to_b']} to {label}."
     if results["errors"]:
         msg += f" {len(results['errors'])} error(s)."
+    if new_plan.copy_to_a:
+        msg += f" {len(new_plan.copy_to_a)} file(s) exist only on {label} — see Promote below."
     if new_plan.needs_confirmation:
         msg += " Some items need manual review (deletions or conflicts)."
     return flash_redirect("#sync", msg)
@@ -336,6 +345,59 @@ def sync_apply_deletes(request: Request, label: str, confirm: str = Form(...)):
         "#sync",
         f"{label}: deleted {results['deleted_from_a']} from primary, {results['deleted_from_b']} from {label}.",
     )
+
+
+# -------------------------------------------------------------------- promote
+# Files that showed up on a backup/mirror root but were never on primary.
+# Reviewed here explicitly (move one, move all, or ignore for good) instead
+# of being silently pulled into primary by "easy sync" above.
+
+@app.post("/promote/move")
+def promote_move(request: Request, source_label: str = Form(...), rel_path: str = Form(...)):
+    with get_conn(request) as conn:
+        primary_row = db.get_primary_root(conn)
+        source_row = db.get_root(conn, source_label)
+        if primary_row is None or source_row is None:
+            return flash_redirect("#promote", "Root no longer configured.")
+        sync.promote_one(RootConfig.from_row(source_row), RootConfig.from_row(primary_row), rel_path)
+    return flash_redirect("#promote", f"Moved '{rel_path}' to primary. It'll show as in-sync on the next scan.")
+
+
+@app.post("/promote/move-all")
+def promote_move_all(request: Request):
+    with get_conn(request) as conn:
+        primary_row = db.get_primary_root(conn)
+        if primary_row is None:
+            return flash_redirect("#promote", "No primary root configured yet.")
+        primary = RootConfig.from_row(primary_row)
+        moved, errors = 0, 0
+        for candidate in sync.promotion_candidates(conn):
+            source_row = db.get_root(conn, candidate["source_label"])
+            if source_row is None:
+                continue
+            try:
+                sync.promote_one(RootConfig.from_row(source_row), primary, candidate["rel_path"])
+                moved += 1
+            except Exception:  # noqa: BLE001 — keep going, report the count
+                errors += 1
+    msg = f"Moved {moved} file(s) to primary."
+    if errors:
+        msg += f" {errors} failed."
+    return flash_redirect("#promote", msg)
+
+
+@app.post("/promote/ignore")
+def promote_ignore(request: Request, rel_path: str = Form(...)):
+    with get_conn(request) as conn:
+        db.ignore_promotion(conn, rel_path)
+    return flash_redirect("#promote", f"Won't suggest moving '{rel_path}' to primary again.")
+
+
+@app.post("/promote/{ignore_id}/unignore")
+def promote_unignore(request: Request, ignore_id: int):
+    with get_conn(request) as conn:
+        db.unignore_promotion(conn, ignore_id)
+    return flash_redirect("#promote", "Removed from the ignored list — it may show up again next scan.")
 
 
 # ----------------------------------------------------------------- duplicates

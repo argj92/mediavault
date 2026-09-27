@@ -64,7 +64,9 @@ def _index_all(conn, root_label: str) -> dict[str, dict]:
     return {r["rel_path"]: dict(r) for r in rows}
 
 
-def plan_sync(conn, root_a: RootConfig, root_b: RootConfig) -> SyncPlan:
+def plan_sync(
+    conn, root_a: RootConfig, root_b: RootConfig, ignored_promotions: frozenset[str] = frozenset()
+) -> SyncPlan:
     idx_a = _index_all(conn, root_a.label)
     idx_b = _index_all(conn, root_b.label)
     plan = SyncPlan(root_a=root_a.label, root_b=root_b.label)
@@ -95,7 +97,10 @@ def plan_sync(conn, root_a: RootConfig, root_b: RootConfig) -> SyncPlan:
         elif b_present and not a_present:
             if a_gone and root_a.is_deletion_source:
                 plan.delete_from_b.append(rel_path)
-            elif root_a.mode == "mirror":
+            elif root_a.mode == "mirror" and rel_path not in ignored_promotions:
+                # Content that showed up on a backup/mirror root but was
+                # never on primary -- a promotion candidate (see the
+                # Promote section), not something to silently pull in.
                 plan.copy_to_a.append(rel_path)
         # both gone or both absent: nothing to do
 
@@ -112,23 +117,37 @@ def _copy_one(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def promote_one(root_b: RootConfig, root_a: RootConfig, rel_path: str) -> None:
+    """The Promote section's single-file 'move to primary' action: the same
+    safe/reversible copy as an ordinary mirror-fill, just explicit and one
+    file at a time instead of bundled silently into 'easy sync'."""
+    _copy_one(root_b.path / rel_path, root_a.path / rel_path)
+
+
 def execute_sync(
     root_a: RootConfig,
     root_b: RootConfig,
     plan: SyncPlan,
     apply_deletes: bool = False,
+    apply_promotions: bool = False,
 ) -> dict:
-    """Applies copy actions (always safe/reversible). Deletions are only
-    applied when apply_deletes=True is passed explicitly by a caller that has
-    already gotten separate, specific user confirmation for them."""
+    """Applies copy_to_b (filling this backup/subset root from primary) --
+    always safe/reversible, so 'easy sync' does it with no extra
+    confirmation. copy_to_a (content that showed up on this root but was
+    never on primary) is a different, more judgment-laden direction -- it's
+    only applied when apply_promotions=True, from the explicit Promote
+    section, not bundled into a plain sync. Deletions are similarly only
+    applied when apply_deletes=True, from a caller that already got
+    separate, specific confirmation for them."""
     results = {"copied_to_a": 0, "copied_to_b": 0, "deleted_from_a": 0, "deleted_from_b": 0, "errors": []}
 
-    for rel in plan.copy_to_a:
-        try:
-            _copy_one(root_b.path / rel, root_a.path / rel)
-            results["copied_to_a"] += 1
-        except Exception as exc:  # noqa: BLE001 — surface per-file, keep going
-            results["errors"].append(f"copy_to_a {rel}: {exc}")
+    if apply_promotions:
+        for rel in plan.copy_to_a:
+            try:
+                promote_one(root_b, root_a, rel)
+                results["copied_to_a"] += 1
+            except Exception as exc:  # noqa: BLE001 — surface per-file, keep going
+                results["errors"].append(f"copy_to_a {rel}: {exc}")
 
     for rel in plan.copy_to_b:
         try:
@@ -162,9 +181,26 @@ def sync_status_for_all(conn) -> list[dict]:
     if primary_row is None:
         return []
     primary = RootConfig.from_row(primary_row)
+    ignored = db.ignored_promotion_paths(conn)
     results = []
     for row in db.syncable_roots(conn, exclude_label=primary.label):
         other = RootConfig.from_row(row)
-        plan = plan_sync(conn, primary, other)
+        plan = plan_sync(conn, primary, other, ignored_promotions=ignored)
         results.append({"primary": primary, "root": other, "plan": plan})
     return results
+
+
+def promotion_candidates(conn) -> list[dict]:
+    """Every file that showed up on a backup/mirror root but was never on
+    primary (across every such root, not just one pair) -- the Promote
+    section's list. Already excludes anything ignored ('cancel once and for
+    all'), since plan_sync itself filters those out of copy_to_a."""
+    candidates = []
+    for status in sync_status_for_all(conn):
+        other = status["root"]
+        for rel_path in status["plan"].copy_to_a:
+            file_row = db.get_file(conn, other.label, rel_path)
+            candidates.append(
+                {"source_label": other.label, "rel_path": rel_path, "size": file_row["size"] if file_row else None}
+            )
+    return candidates

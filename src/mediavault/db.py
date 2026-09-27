@@ -49,6 +49,18 @@ CREATE TABLE IF NOT EXISTS remote_files (
 CREATE INDEX IF NOT EXISTS idx_remote_files_hash ON remote_files(hash);
 CREATE INDEX IF NOT EXISTS idx_remote_files_machine ON remote_files(machine);
 
+-- A file present on a backup/mirror root but never seen on primary is a
+-- promotion candidate (see sync.plan_sync's copy_to_a). Ignoring one here is
+-- permanent ("cancel once and for all" from the Promote section) -- it's
+-- keyed on primary-relative rel_path alone since primary is singular, so it
+-- suppresses the suggestion regardless of which backup root it keeps
+-- turning up in.
+CREATE TABLE IF NOT EXISTS promotion_ignores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rel_path TEXT NOT NULL UNIQUE,
+    ignored_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS quarantine (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     original_root TEXT NOT NULL,
@@ -184,6 +196,26 @@ def syncable_roots(conn: sqlite3.Connection, exclude_label: str) -> list[sqlite3
         "SELECT * FROM roots WHERE enabled=1 AND label != ? AND mode IN ('mirror', 'subset') ORDER BY label",
         (exclude_label,),
     ).fetchall()
+
+
+def ignore_promotion(conn: sqlite3.Connection, rel_path: str) -> None:
+    conn.execute(
+        "INSERT INTO promotion_ignores (rel_path, ignored_at) VALUES (?, ?) "
+        "ON CONFLICT(rel_path) DO NOTHING",
+        (rel_path, time.time()),
+    )
+
+
+def unignore_promotion(conn: sqlite3.Connection, ignore_id: int) -> None:
+    conn.execute("DELETE FROM promotion_ignores WHERE id=?", (ignore_id,))
+
+
+def list_ignored_promotions(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM promotion_ignores ORDER BY rel_path").fetchall()
+
+
+def ignored_promotion_paths(conn: sqlite3.Connection) -> frozenset[str]:
+    return frozenset(r["rel_path"] for r in conn.execute("SELECT rel_path FROM promotion_ignores").fetchall())
 
 
 def save_remote_catalog(conn: sqlite3.Connection, machine: str, exported_at: str | None, files: list[dict]) -> None:

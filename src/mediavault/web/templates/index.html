@@ -117,7 +117,7 @@
 <details id="sync" open class="section">
   <summary>Sync <span class="count">{{ sync_statuses|length }}</span></summary>
   <div class="section-body">
-    <p class="subtle">Every non-primary <b>mirror</b>/<b>subset</b> root is compared against the single primary root automatically — no manual pairing. "Sync now" copies anything missing on the mirror side(s) — it never auto-fills a <b>subset</b>/<b>watch</b> root (e.g. a storage-limited iCloud folder) and never deletes anything; deletions and conflicts always need a manual review below.</p>
+    <p class="subtle">Every non-primary <b>mirror</b>/<b>subset</b> root is compared against the single primary root automatically — no manual pairing. "Sync now" fills this root with whatever's missing that primary already has — it never auto-fills a <b>subset</b>/<b>watch</b> root (e.g. a storage-limited iCloud folder) and never deletes anything; deletions and conflicts always need a manual review below. Files that exist only on this root (never on primary) aren't pulled in here — see <a href="#promote">Promote</a>.</p>
 
     {% if not has_primary %}
     <p class="subtle">No primary root configured yet — mark one root <b>primary</b> under Roots above to enable sync.</p>
@@ -133,7 +133,8 @@
       </div>
       <div class="stat-line">
         <span><strong>{{ s.plan.in_sync }}</strong>in sync</span>
-        <span><strong>{{ s.plan.copy_to_a|length + s.plan.copy_to_b|length }}</strong>to copy</span>
+        <span><strong>{{ s.plan.copy_to_b|length }}</strong>to copy</span>
+        <span class="{{ 'stat-warn' if s.plan.copy_to_a else '' }}"><strong>{{ s.plan.copy_to_a|length }}</strong>only on {{ s.root.label }}</span>
         <span class="{{ 'stat-warn' if s.plan.conflicts else '' }}"><strong>{{ s.plan.conflicts|length }}</strong>conflicts</span>
         <span class="{{ 'stat-warn' if s.plan.delete_from_a or s.plan.delete_from_b else '' }}"><strong>{{ s.plan.delete_from_a|length + s.plan.delete_from_b|length }}</strong>deletion candidates</span>
         <span><strong>{{ s.plan.unverifiable|length }}</strong>cloud placeholder</span>
@@ -162,6 +163,62 @@
       {% endif %}
     </div>
     {% endfor %}
+  </div>
+</details>
+
+<!-- ======================================================= PROMOTE -->
+<details id="promote" class="section">
+  <summary>Promote <span class="count">{{ promote_candidates|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Files that exist on a backup/mirror root but were never on primary — content that only ever showed up somewhere else. Move one to primary, move all of them, or ignore one for good if it shouldn't be on primary (a stray download, something you deliberately keep off the main drive, etc.) — ignored files stop being suggested here.</p>
+
+    {% if not has_primary %}
+    <p class="subtle">No primary root configured yet — mark one root <b>primary</b> under Roots above.</p>
+    {% elif not promote_candidates %}
+    <p class="subtle">Nothing to promote — every backup/mirror root's files are already accounted for on primary.</p>
+    {% else %}
+    <form method="post" action="/promote/move-all" onsubmit="return confirm('Move all {{ promote_candidates|length }} file(s) to primary?');">
+      <button>Move all {{ promote_candidates|length }} to primary</button>
+    </form>
+    <table>
+      <tr><th>Only on</th><th>Path</th><th>Size</th><th colspan="2"></th></tr>
+      {% for c in promote_candidates %}
+      <tr>
+        <td>{{ c.source_label }}</td>
+        <td class="path">{{ c.rel_path }}</td>
+        <td>{{ c.size|human_bytes }}</td>
+        <td>
+          <form method="post" action="/promote/move">
+            <input type="hidden" name="source_label" value="{{ c.source_label }}">
+            <input type="hidden" name="rel_path" value="{{ c.rel_path }}">
+            <button>Move to primary</button>
+          </form>
+        </td>
+        <td>
+          <form method="post" action="/promote/ignore" onsubmit="return confirm('Never suggest moving this to primary again?');">
+            <input type="hidden" name="rel_path" value="{{ c.rel_path }}">
+            <button class="danger">Ignore forever</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if ignored_promotions %}
+    <details class="subsection">
+      <summary>Ignored ({{ ignored_promotions|length }})</summary>
+      <table>
+        <tr><th>Path</th><th></th></tr>
+        {% for ig in ignored_promotions %}
+        <tr>
+          <td class="path">{{ ig.rel_path }}</td>
+          <td><form method="post" action="/promote/{{ ig.id }}/unignore"><button>Un-ignore</button></form></td>
+        </tr>
+        {% endfor %}
+      </table>
+    </details>
+    {% endif %}
   </div>
 </details>
 
