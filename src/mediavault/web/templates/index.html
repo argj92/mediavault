@@ -4,33 +4,6 @@
 <h1>{{ machine }}</h1>
 <p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
 
-<div class="cards">
-  <div class="card">
-    <div class="card-value">{{ roots|length }}</div>
-    <div class="card-label">tracked roots</div>
-  </div>
-  <div class="card">
-    <div class="card-value">{{ total_files }}</div>
-    <div class="card-label">files indexed ({{ total_bytes|human_bytes }})</div>
-  </div>
-  <div class="card {{ 'warn' if dup_groups else '' }}">
-    <div class="card-value">{{ dup_groups|length }}</div>
-    <div class="card-label">duplicate groups ({{ wasted_bytes|human_bytes }} reclaimable)</div>
-  </div>
-  <div class="card {{ 'warn' if untracked_count else '' }}">
-    <div class="card-value">{{ untracked_count }}</div>
-    <div class="card-label">untracked media in inbox</div>
-  </div>
-  <div class="card">
-    <div class="card-value">{{ quarantine_count }}</div>
-    <div class="card-label">items in quarantine</div>
-  </div>
-  <div class="card {{ '' if trash_accurate else 'warn' }}">
-    <div class="card-value">{{ trash_bytes|human_bytes }}{{ '' if trash_accurate else '+' }}</div>
-    <div class="card-label">{{ 'in system trash' if trash_accurate else 'in system trash (permission-limited)' }}</div>
-  </div>
-</div>
-
 <!-- ============================================================ ROOTS -->
 <details id="roots" open class="section">
   <summary>Roots <span class="count">{{ roots|length }}</span></summary>
@@ -107,12 +80,12 @@
         {{ s.root.label }}
         <span class="pill {{ 'ok' if not s.plan.out_of_sync else 'warn' }}">{{ 'in sync' if not s.plan.out_of_sync else 'out of sync' }}</span>
       </div>
-      <div class="cards">
-        <div class="card"><div class="card-value">{{ s.plan.in_sync }}</div><div class="card-label">in sync</div></div>
-        <div class="card"><div class="card-value">{{ s.plan.copy_to_a|length + s.plan.copy_to_b|length }}</div><div class="card-label">to copy</div></div>
-        <div class="card {{ 'warn' if s.plan.conflicts else '' }}"><div class="card-value">{{ s.plan.conflicts|length }}</div><div class="card-label">conflicts</div></div>
-        <div class="card {{ 'warn' if s.plan.delete_from_a or s.plan.delete_from_b else '' }}"><div class="card-value">{{ s.plan.delete_from_a|length + s.plan.delete_from_b|length }}</div><div class="card-label">deletion candidates</div></div>
-        <div class="card"><div class="card-value">{{ s.plan.unverifiable|length }}</div><div class="card-label">cloud placeholder</div></div>
+      <div class="stat-line">
+        <span><strong>{{ s.plan.in_sync }}</strong>in sync</span>
+        <span><strong>{{ s.plan.copy_to_a|length + s.plan.copy_to_b|length }}</strong>to copy</span>
+        <span class="{{ 'stat-warn' if s.plan.conflicts else '' }}"><strong>{{ s.plan.conflicts|length }}</strong>conflicts</span>
+        <span class="{{ 'stat-warn' if s.plan.delete_from_a or s.plan.delete_from_b else '' }}"><strong>{{ s.plan.delete_from_a|length + s.plan.delete_from_b|length }}</strong>deletion candidates</span>
+        <span><strong>{{ s.plan.unverifiable|length }}</strong>cloud placeholder</span>
       </div>
       <form method="post" action="/sync/{{ s.root.label }}"><button>Sync now (copies only, safe)</button></form>
 
@@ -147,10 +120,10 @@
   <div class="section-body">
     <p class="subtle">For every file (by content hash), how many independent <b>mirror</b>-mode copies exist — locally, and on any other machine whose catalog you've imported below. A <b>subset</b> (e.g. iCloud) or <b>watch</b> copy never counts toward protection — it's not a backup. A file backed by only one copy is at risk.</p>
 
-    <div class="cards">
-      <div class="card"><div class="card-value">{{ protection_report.covered }}/{{ protection_report.total_groups }}</div><div class="card-label">files with 2+ protective copies</div></div>
-      <div class="card {{ 'warn' if protection_report.at_risk else '' }}"><div class="card-value">{{ protection_report.at_risk|length }}</div><div class="card-label">at risk (only 1 copy)</div></div>
-      <div class="card"><div class="card-value">{{ protection_report.known_machines|length }}</div><div class="card-label">known machines</div></div>
+    <div class="stat-line">
+      <span><strong>{{ protection_report.covered }}/{{ protection_report.total_groups }}</strong>files with 2+ protective copies</span>
+      <span class="{{ 'stat-warn' if protection_report.at_risk else '' }}"><strong>{{ protection_report.at_risk|length }}</strong>at risk (only 1 copy)</span>
+      <span><strong>{{ protection_report.known_machines|length }}</strong>known machines</span>
     </div>
 
     {% if protection_report.at_risk %}
@@ -271,10 +244,10 @@
     {% if s.error %}
     <p class="subtle">{{ s.error }}</p>
     {% else %}
-    <div class="cards">
-      <div class="card"><div class="card-value">{{ s.summary.downloaded_count }}</div><div class="card-label">downloaded locally</div></div>
-      <div class="card"><div class="card-value">{{ s.summary.placeholder_count }}</div><div class="card-label">cloud-only placeholders</div></div>
-      <div class="card"><div class="card-value">{{ s.summary.downloaded_bytes|human_bytes }}</div><div class="card-label">local disk used here</div></div>
+    <div class="stat-line">
+      <span><strong>{{ s.summary.downloaded_count }}</strong>downloaded locally</span>
+      <span><strong>{{ s.summary.placeholder_count }}</strong>cloud-only placeholders</span>
+      <span><strong>{{ s.summary.downloaded_bytes|human_bytes }}</strong>local disk used here</span>
     </div>
     <table>
       <tr><th>Path</th><th>Size</th></tr>
