@@ -193,6 +193,13 @@ def roots_pick_folder():
     )
 
 
+_PRIMARY_CONFLICT_MSG = (
+    "There's already a primary root (the single basis every other root syncs "
+    "against) — only one is supported. Use a different role, or change the "
+    "existing primary's role first."
+)
+
+
 @app.post("/roots/add")
 def roots_add(
     request: Request,
@@ -205,14 +212,23 @@ def roots_add(
     label = label.strip()
     with get_conn(request) as conn:
         if role == "primary" and db.count_primary_roots(conn, exclude_label=label) > 0:
-            return flash_redirect(
-                "#roots",
-                "There's already a primary root (the single basis every other root syncs "
-                "against) — only one is supported. Use a different role, or change the "
-                "existing primary's role first.",
-            )
+            return flash_redirect("#roots", _PRIMARY_CONFLICT_MSG)
         db.upsert_root(conn, label, str(expanded), role, mode)
     return flash_redirect("#roots", f"Added root '{label}'. It'll be picked up on the next scan cycle.")
+
+
+@app.post("/roots/{label}/update")
+def roots_update(request: Request, label: str, role: str = Form(...), mode: str = Form(...)):
+    """Changes a root's role/mode in place — e.g. re-designating which root
+    is primary, or turning a mirror backup into an icloud subset — without
+    losing its indexed files the way remove+re-add would."""
+    with get_conn(request) as conn:
+        if db.get_root(conn, label) is None:
+            return flash_redirect("#roots", f"No such root '{label}'.")
+        if role == "primary" and db.count_primary_roots(conn, exclude_label=label) > 0:
+            return flash_redirect("#roots", _PRIMARY_CONFLICT_MSG)
+        db.update_root_role_mode(conn, label, role, mode)
+    return flash_redirect("#roots", f"Updated '{label}' to {role}/{mode}.")
 
 
 @app.post("/roots/{label}/toggle")

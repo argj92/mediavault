@@ -94,6 +94,36 @@ def root_add(
     console.print(f"[green]Added root '{label}' ({role}/{mode}) -> {path}[/green]")
 
 
+@root_app.command("edit")
+def root_edit(
+    label: str,
+    role: str = typer.Option(None, help="primary | backup | icloud | inbox"),
+    mode: str = typer.Option(None, help="mirror | subset | watch"),
+):
+    """Change a root's role/mode in place -- without losing its indexed
+    files the way `remove` + `add` would."""
+    if role is None and mode is None:
+        console.print("[yellow]Nothing to change — pass --role and/or --mode.[/yellow]")
+        raise typer.Exit(1)
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        row = db.get_root(conn, label)
+        if row is None:
+            console.print(f"[red]No such root '{label}'[/red]")
+            raise typer.Exit(1)
+        new_role = role or row["role"]
+        new_mode = mode or row["mode"]
+        if new_role == "primary" and db.count_primary_roots(conn, exclude_label=label) > 0:
+            console.print(
+                "[red]There's already a primary root — that's the single basis every other "
+                "root syncs against, so only one is supported. Change the existing primary's "
+                "role first.[/red]"
+            )
+            raise typer.Exit(1)
+        db.update_root_role_mode(conn, label, new_role, new_mode)
+    console.print(f"[green]Updated '{label}' to {new_role}/{new_mode}.[/green]")
+
+
 @root_app.command("list")
 def root_list():
     config = _load()

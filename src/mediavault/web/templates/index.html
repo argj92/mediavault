@@ -11,12 +11,26 @@
     <p class="subtle">A root is any folder this machine tracks. Exactly one root should be <b>primary</b> — the single basis every other root syncs against. Mark a folder <b>subset</b> (like an iCloud folder that only holds part of your library) so it's never treated as a deletion source, or <b>mirror</b> for a full backup copy.</p>
 
     <table>
-      <tr><th>Label</th><th>Role</th><th>Mode</th><th>Path</th><th>Enabled</th><th colspan="3">Actions</th></tr>
+      <tr><th>Label</th><th>Role / Mode</th><th>Path</th><th>Enabled</th><th colspan="3">Actions</th></tr>
       {% for r in roots %}
       <tr>
         <td>{{ r.label }}{% if r.role == 'primary' %} <span class="pill ok">basis</span>{% endif %}</td>
-        <td>{{ r.role }}</td>
-        <td>{{ r.mode }}</td>
+        <td>
+          <form method="post" action="/roots/{{ r.label }}/update" class="inline-edit">
+            <select name="role">
+              <option value="primary" {{ "selected" if r.role == "primary" else "" }}>primary</option>
+              <option value="backup" {{ "selected" if r.role == "backup" else "" }}>backup</option>
+              <option value="icloud" {{ "selected" if r.role == "icloud" else "" }}>icloud</option>
+              <option value="inbox" {{ "selected" if r.role == "inbox" else "" }}>inbox</option>
+            </select>
+            <select name="mode">
+              <option value="mirror" {{ "selected" if r.mode == "mirror" else "" }}>mirror</option>
+              <option value="subset" {{ "selected" if r.mode == "subset" else "" }}>subset</option>
+              <option value="watch" {{ "selected" if r.mode == "watch" else "" }}>watch</option>
+            </select>
+            <button>Save</button>
+          </form>
+        </td>
         <td class="path">{{ r.path }}</td>
         <td>{{ "yes" if r.enabled else "no" }}</td>
         <td><form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form></td>
@@ -29,7 +43,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="subtle">No roots yet — add one below.</td></tr>
+      <tr><td colspan="7" class="subtle">No roots yet — add one below.</td></tr>
       {% endfor %}
     </table>
 

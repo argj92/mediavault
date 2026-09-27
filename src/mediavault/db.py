@@ -146,6 +146,12 @@ def set_root_enabled(conn: sqlite3.Connection, label: str, enabled: bool) -> Non
     conn.execute("UPDATE roots SET enabled=? WHERE label=?", (int(enabled), label))
 
 
+def update_root_role_mode(conn: sqlite3.Connection, label: str, role: str, mode: str) -> None:
+    """Changes what a root MEANS (role/mode) without touching its path or
+    losing its indexed files — unlike remove+re-add, which wipes the index."""
+    conn.execute("UPDATE roots SET role=?, mode=? WHERE label=?", (role, mode, label))
+
+
 def remove_root(conn: sqlite3.Connection, label: str) -> None:
     conn.execute("DELETE FROM files WHERE root_label=?", (label,))
     conn.execute("DELETE FROM scans WHERE root_label=?", (label,))
