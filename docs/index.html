@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaVault — a movie &amp; TV library that watches its own back</title>
+<meta name="description" content="A local-first, cross-machine movie &amp; TV library manager: single-basis backup sync, duplicate detection, iCloud-aware storage, and cross-machine protection tracking. Your library, your machines, your data.">
+<style>
+  :root{
+    --bg:#000000; --panel:#0a0b0d; --panel-alt:#111319;
+    --border:#1c1f26; --border-bright:#2a3f66;
+    --text:#b7bcc7; --bright:#ffffff; --subtle:#62676f;
+    --accent:#2f6feb; --accent-bright:#6ea8ff; --accent-dim:rgba(47,111,235,.14);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    line-height:1.6;
+  }
+  a{color:var(--accent-bright); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px; margin:0 auto; padding:0 1.5rem}
+
+  /* subtle ambient glow */
+  .glow{
+    position:fixed; inset:0; z-index:-1; pointer-events:none;
+    background:radial-gradient(600px circle at 15% -10%, rgba(47,111,235,.16), transparent 60%),
+               radial-gradient(500px circle at 85% 10%, rgba(47,111,235,.10), transparent 55%);
+  }
+
+  nav{display:flex; align-items:center; justify-content:space-between; padding:1.4rem 0}
+  .brand{display:flex; align-items:center; gap:.55rem; color:var(--bright); font-weight:700; letter-spacing:.01em; font-size:1.05rem}
+  .brand::before{content:""; width:9px; height:9px; border-radius:50%; background:var(--accent); box-shadow:0 0 10px 2px var(--accent)}
+  nav .links{display:flex; gap:1.6rem; font-size:.88rem; color:var(--subtle)}
+  nav .links a{color:var(--subtle)}
+  nav .links a:hover{color:var(--accent-bright); text-decoration:none}
+
+  header.hero{padding:5.5rem 0 4.5rem; text-align:left}
+  .eyebrow{
+    display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--accent-bright); background:var(--accent-dim); border:1px solid var(--border-bright);
+    border-radius:999px; padding:.3rem .8rem; margin-bottom:1.4rem;
+  }
+  h1{font-size:clamp(2.1rem,5vw,3.4rem); line-height:1.08; letter-spacing:-.02em; color:var(--bright); margin:0 0 1.1rem; max-width:20ch}
+  h1 .accent{color:var(--accent-bright)}
+  .lede{font-size:1.1rem; color:var(--text); max-width:52ch; margin:0 0 2.2rem}
+  .cta{display:flex; gap:.9rem; flex-wrap:wrap}
+  .btn{
+    display:inline-flex; align-items:center; gap:.5rem; font-weight:650; font-size:.9rem;
+    border-radius:9px; padding:.7rem 1.3rem; border:1px solid var(--border-bright);
+    transition:border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+  }
+  .btn.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
+  .btn.primary:hover{box-shadow:0 0 20px -4px var(--accent); transform:translateY(-1px); text-decoration:none}
+  .btn.ghost{color:var(--accent-bright)}
+  .btn.ghost:hover{box-shadow:0 0 0 1px var(--accent-bright) inset; text-decoration:none}
+
+  .mock{
+    margin-top:3.2rem; border:1px solid var(--border); border-radius:14px; overflow:hidden;
+    background:var(--panel); box-shadow:0 40px 80px -40px rgba(47,111,235,.25);
+  }
+  .mock-bar{display:flex; gap:.4rem; padding:.7rem .9rem; border-bottom:1px solid var(--border)}
+  .mock-bar span{width:9px; height:9px; border-radius:50%; background:#26282e}
+  .mock-body{padding:1.4rem 1.6rem 1.8rem}
+  .mock-title{color:var(--bright); font-weight:700; font-size:1.15rem; margin-bottom:.15rem}
+  .mock-sub{color:var(--subtle); font-size:.78rem; margin-bottom:1.1rem}
+  .mock-section{border:1px solid var(--border); border-radius:10px; padding:.9rem 1.1rem; margin-bottom:.7rem}
+  .mock-section .head{display:flex; align-items:center; gap:.55rem; color:var(--bright); font-weight:650; font-size:.9rem}
+  .mock-section .head .badge{
+    font-size:.68rem; font-weight:700; color:var(--accent-bright); background:var(--accent-dim);
+    border:1px solid var(--border-bright); border-radius:999px; padding:.05rem .55rem;
+  }
+  .mock-stats{display:flex; gap:1.3rem; margin-top:.55rem; font-size:.76rem; color:var(--subtle); flex-wrap:wrap}
+  .mock-stats strong{color:var(--accent-bright)}
+
+  section.feature{padding:3.4rem 0; border-top:1px solid var(--border)}
+  .feature h2{color:var(--bright); font-size:1.5rem; letter-spacing:-.01em; margin:0 0 .6rem}
+  .feature p.lede2{color:var(--subtle); max-width:60ch; margin:0 0 2rem; font-size:.95rem}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1.1rem}
+  .card{border:1px solid var(--border); border-radius:12px; padding:1.3rem 1.4rem; background:var(--panel)}
+  .card h3{color:var(--bright); font-size:.98rem; margin:0 0 .5rem; display:flex; align-items:center; gap:.5rem}
+  .card h3::before{content:""; width:6px; height:6px; border-radius:50%; background:var(--accent)}
+  .card p{color:var(--subtle); font-size:.85rem; margin:0}
+
+  .install{padding:3.6rem 0; border-top:1px solid var(--border)}
+  .install h2{color:var(--bright); font-size:1.5rem; margin:0 0 .6rem}
+  .install p.lede2{color:var(--subtle); max-width:58ch; margin:0 0 1.6rem; font-size:.95rem}
+  pre{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:1.1rem 1.3rem; overflow-x:auto; font-size:.83rem; line-height:1.7;
+  }
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--accent-bright)}
+  pre code{color:var(--text)}
+  pre code .cmt{color:var(--subtle)}
+
+  footer{padding:3rem 0 4rem; border-top:1px solid var(--border); color:var(--subtle); font-size:.85rem; display:flex; justify-content:space-between; flex-wrap:wrap; gap:1rem}
+  footer a{color:var(--subtle)}
+  footer a:hover{color:var(--accent-bright)}
+
+  @media(max-width:640px){ nav .links{display:none} .cta{flex-direction:column} .mock-stats{gap:.8rem} }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+<div class="wrap">
+  <nav>
+    <div class="brand">MediaVault</div>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/argj92/mediavault">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <span class="eyebrow">Local-first &middot; cross-machine &middot; open source</span>
+    <h1>A movie &amp; TV library that <span class="accent">watches its own back.</span></h1>
+    <p class="lede">Single-basis backup sync, duplicate detection, iCloud-aware storage, and cross-machine protection tracking — running entirely on your own machines. No account, no cloud service, no upload.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/argj92/mediavault">View on GitHub</a>
+      <a class="btn ghost" href="#install">Install in one command &rarr;</a>
+    </div>
+
+    <div class="mock" aria-hidden="true">
+      <div class="mock-bar"><span></span><span></span><span></span></div>
+      <div class="mock-body">
+        <div class="mock-title">Studio-MacBook.local</div>
+        <div class="mock-sub">Background rescan every 15 min &middot; nothing here is shared via git</div>
+
+        <div class="mock-section">
+          <div class="head">Sync <span class="badge">1</span></div>
+          <div class="mock-stats">
+            <span><strong>142</strong> in sync</span>
+            <span><strong>1</strong> to copy</span>
+            <span><strong>0</strong> conflicts</span>
+            <span><strong>0</strong> deletion candidates</span>
+          </div>
+        </div>
+        <div class="mock-section">
+          <div class="head">Protection <span class="badge">3</span></div>
+          <div class="mock-stats">
+            <span><strong>139/142</strong> files with 2+ protective copies</span>
+            <span><strong>3</strong> at risk (only 1 copy)</span>
+            <span><strong>2</strong> known machines</span>
+          </div>
+        </div>
+        <div class="mock-section">
+          <div class="head">iCloud Storage <span class="badge">1</span></div>
+          <div class="mock-stats">
+            <span><strong>412</strong> downloaded locally</span>
+            <span><strong>1,208</strong> cloud-only placeholders</span>
+            <span><strong>86.4 GB</strong> local disk used here</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="feature" id="features">
+    <h2>What it actually does</h2>
+    <p class="lede2">Built from one real, recurring problem: a movie/TV library spread across a primary drive, a backup, and a storage-limited iCloud folder — and no easy way to know what's actually protected.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>Single-basis sync</h3>
+        <p>Mark one root <code>primary</code>. Every other backup/subset root is compared against it automatically — no pairwise wiring, no matter how many copies you keep.</p>
+      </div>
+      <div class="card">
+        <h3>iCloud-aware</h3>
+        <p>Detects real, undownloaded iCloud placeholder files without forcing a download, and never mistakes a storage-optimized copy for a backup.</p>
+      </div>
+      <div class="card">
+        <h3>Duplicate detection</h3>
+        <p>Content-hash duplicates across every tracked root, largest first. Removing a copy quarantines it — recoverable, never a hard delete.</p>
+      </div>
+      <div class="card">
+        <h3>Cross-machine protection</h3>
+        <p>Exchange a small portable JSON catalog (hash/size/path only, never the media) between machines that aren't mounted at once, and see which files exist in exactly one place.</p>
+      </div>
+      <div class="card">
+        <h3>Metadata enrichment</h3>
+        <p>Release-name parsing via <code>guessit</code>, optionally confirmed against TMDB, with a one-click rename to a clean standard name.</p>
+      </div>
+      <div class="card">
+        <h3>Safe by default</h3>
+        <p>Copies are always safe to auto-apply. Deletions, conflicts, and permanent removals always require an explicit, separate confirmation.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="install" id="install">
+    <h2>Install</h2>
+    <p class="lede2">One script finds (or installs) Python 3.10+, creates a virtualenv, and initializes this machine's local config and index.</p>
+    <pre><code><span class="cmt"># clone and bootstrap</span>
+git clone git@github.com:argj92/mediavault.git
+cd mediavault
+./scripts/setup.sh
+
+<span class="cmt"># add your library, then run it</span>
+.venv/bin/mediavault root add primary-library /path/to/movies --role primary --mode mirror
+.venv/bin/mediavault web   <span class="cmt"># or: mediavault gui</span></code></pre>
+  </section>
+
+  <footer>
+    <span>MediaVault — code and docs are open source; your library, config, and index stay on your own machines.</span>
+    <a href="https://github.com/argj92/mediavault">github.com/argj92/mediavault</a>
+  </footer>
+</div>
+</body>
+</html>
