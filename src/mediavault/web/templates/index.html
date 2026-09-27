@@ -200,8 +200,9 @@
   </div>
 </details>
 
+{% if dup_groups %}
 <!-- ======================================================= DUPLICATES -->
-<details id="duplicates" class="section">
+<details id="duplicates" open class="section">
   <summary>Duplicates <span class="count">{{ dup_groups|length }}</span></summary>
   <div class="section-body">
     <p class="subtle">{{ dup_groups|length }} duplicate group(s), {{ wasted_bytes|human_bytes }} reclaimable. Removing a copy moves it to <a href="#recycle-bin">quarantine</a> — nothing is deleted outright.</p>
@@ -227,14 +228,14 @@
         {% endfor %}
       </table>
     </div>
-    {% else %}
-    <p class="subtle">No duplicates found.</p>
     {% endfor %}
   </div>
 </details>
+{% endif %}
 
+{% if untracked_count %}
 <!-- ====================================================== SUGGESTIONS -->
-<details id="suggestions" class="section">
+<details id="suggestions" open class="section">
   <summary>Suggestions <span class="count">{{ untracked_count }}</span></summary>
   <div class="section-body">
     <p class="subtle">Media sitting in your inbox folders (e.g. Downloads) that isn't tracked in any library root yet.</p>
@@ -253,12 +254,11 @@
           {% endif %}
         </td>
       </tr>
-      {% else %}
-      <tr><td colspan="4" class="subtle">Nothing found. Add an "inbox" root under Roots to enable this.</td></tr>
       {% endfor %}
     </table>
   </div>
 </details>
+{% endif %}
 
 <!-- =========================================================== ICLOUD -->
 <details id="icloud" class="section">
@@ -352,8 +352,9 @@
   </div>
 </details>
 
+{% if metadata_files %}
 <!-- ========================================================== METADATA -->
-<details id="metadata" class="section">
+<details id="metadata" open class="section">
   <summary>Metadata <span class="count">{{ metadata_files|length }}</span></summary>
   <div class="section-body">
     <p class="subtle">Files with no guessed title/year yet. "Guess" parses the filename (and confirms against TMDB if TMDB_API_KEY is set), then you can rename to the suggested standard name.</p>
@@ -365,12 +366,11 @@
         <td class="path">{{ f.rel_path }}</td>
         <td><form method="post" action="/metadata/{{ f.id }}/enrich"><button>Guess title/year</button></form></td>
       </tr>
-      {% else %}
-      <tr><td colspan="3" class="subtle">Nothing left to guess — every tracked file already has a title/year.</td></tr>
       {% endfor %}
     </table>
   </div>
 </details>
+{% endif %}
 
 <script>
 document.getElementById('browse-btn').addEventListener('click', async () => {

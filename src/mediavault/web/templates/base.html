@@ -12,11 +12,11 @@
     <a href="#roots">Roots</a>
     <a href="#sync">Sync</a>
     <a href="#protection">Protection</a>
-    <a href="#duplicates">Duplicates</a>
-    <a href="#suggestions">Suggestions</a>
+    {% if dup_groups %}<a href="#duplicates">Duplicates</a>{% endif %}
+    {% if untracked_count %}<a href="#suggestions">Suggestions</a>{% endif %}
     <a href="#icloud">iCloud Storage</a>
     <a href="#recycle-bin">Recycle Bin</a>
-    <a href="#metadata">Metadata</a>
+    {% if metadata_files %}<a href="#metadata">Metadata</a>{% endif %}
   </nav>
   <main>
     {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
