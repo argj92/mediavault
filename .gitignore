@@ -12,6 +12,12 @@ config.yaml
 *.db-journal
 .mediavault_trash/
 
+# Exported catalogs (mediavault catalog export) list every file's path,
+# size, and hash across your library — real personal data, not code. These
+# are meant to be moved between machines by hand (AirDrop, a USB drive),
+# never committed.
+*-catalog.json
+
 # Editors / OS
 .DS_Store
 .idea/
