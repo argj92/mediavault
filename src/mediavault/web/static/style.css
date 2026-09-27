@@ -203,3 +203,11 @@ button:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
 a { color: var(--accent-bright); }
 
 form { display: inline-block; margin: 0; }
+
+code { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.35rem; font-size: 0.85em; }
+
+.video-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.3rem 0; }
+.video-row .play-btn { flex: 0 0 auto; }
+.video-player:empty { display: none; }
+.video-player { margin: 0.4rem 0 0.8rem; }
+.video-player video { display: block; }

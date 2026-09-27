@@ -267,6 +267,10 @@ def get_file(conn: sqlite3.Connection, root_label: str, rel_path: str) -> sqlite
     ).fetchone()
 
 
+def get_file_by_id(conn: sqlite3.Connection, file_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+
+
 def upsert_file(
     conn: sqlite3.Connection,
     root_label: str,

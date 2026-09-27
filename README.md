@@ -12,6 +12,13 @@ shared between machines; each machine keeps its own local index and config.
 The web/desktop UI is a single page with a collapsible section for each of
 these (click a section to expand/collapse it; the top nav just jumps to one):
 
+- **Library** — browse every tracked root's video files by folder and play
+  them inline (streamed as-is, no transcoding, so playback depends on your
+  browser's own codec support — mp4/mov generally work, mkv/avi/wmv often
+  won't). A folder is left out of this view (but still fully scanned,
+  synced, and deduped like any other) if its name starts with `.`, or if it
+  contains a `.mediavault-hide` marker file — drop an empty file by that
+  name in any folder you want backed up/deduped but not shown here.
 - **Roots** — any folder a machine tracks. Each has a `role` (primary,
   backup, icloud, inbox) and a `mode`. **Exactly one root should be
   `primary`** — that's the single basis every other root is compared
