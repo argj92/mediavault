@@ -59,9 +59,13 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
     }
 
 
-def notify_on_changes(conn: sqlite3.Connection, summary: dict) -> None:
+def notify_on_changes(conn: sqlite3.Connection, summary: dict, config: AppConfig) -> None:
+    """The "last_notified_*"/"last_sync_status" baselines are always kept
+    current, even with notifications_enabled=False -- so turning them back
+    on later only notifies about genuinely new changes from that point on,
+    not a backlog of everything that happened while they were off."""
     last_dupes = db.get_worker_state(conn, "last_notified_duplicate_groups", 0)
-    if summary["duplicate_groups"] > last_dupes:
+    if summary["duplicate_groups"] > last_dupes and config.notifications_enabled:
         notify.notify(
             "MediaVault — new duplicates found",
             f"{summary['duplicate_groups']} duplicate group(s), "
@@ -74,7 +78,7 @@ def notify_on_changes(conn: sqlite3.Connection, summary: dict) -> None:
     for s in summary["sync_status"]:
         key = s["label"]
         new_sync_status[key] = s["out_of_sync"]
-        if s["out_of_sync"] and not last_sync_status.get(key, False):
+        if s["out_of_sync"] and not last_sync_status.get(key, False) and config.notifications_enabled:
             notify.notify(
                 "MediaVault — out of sync with primary",
                 f"{s['label']}: {s['copy_to_a'] + s['copy_to_b']} file(s) to copy, "
@@ -83,7 +87,7 @@ def notify_on_changes(conn: sqlite3.Connection, summary: dict) -> None:
     db.set_worker_state(conn, "last_sync_status", new_sync_status)
 
     last_untracked = db.get_worker_state(conn, "last_notified_untracked", 0)
-    if summary["untracked_count"] > last_untracked:
+    if summary["untracked_count"] > last_untracked and config.notifications_enabled:
         notify.notify(
             "MediaVault — new media found",
             f"{summary['untracked_count']} file(s) in your inbox folders aren't in the library yet.",
@@ -105,7 +109,7 @@ class BackgroundWorker:
         with db.connect(self.config.db_path) as conn:
             db.init_db(conn)
             summary = reconcile_once(conn, self.config)
-            notify_on_changes(conn, summary)
+            notify_on_changes(conn, summary, self.config)
             return summary
 
     def _loop(self) -> None:
