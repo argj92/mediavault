@@ -35,9 +35,17 @@ these (click a section to expand/collapse it; the top nav just jumps to one):
   When adding a root, use the **Browse…** button (macOS/Linux) to pick the
   folder in a native dialog instead of typing the path.
 - **Sync** — every non-primary `mirror`/`subset` root, shown against the
-  primary automatically. The "easy sync" button copies whatever's missing on
-  the mirror side(s); actual deletions and content conflicts always need a
-  separate, explicit confirmation shown inline under that root.
+  primary automatically. The "easy sync" button fills that root with
+  whatever's missing that primary already has; actual deletions and content
+  conflicts always need a separate, explicit confirmation shown inline under
+  that root. Content that goes the *other* way — it exists on a backup/mirror
+  root but was never on primary — isn't pulled in here; see **Promote**.
+- **Promote** — files that showed up on a backup/mirror root but were never
+  on primary (a stray download, something added directly to a backup drive,
+  etc.), listed across every such root in one place. Move a file to primary,
+  move all of them at once, or ignore one for good if it shouldn't be on
+  primary — ignoring is permanent until you explicitly un-ignore it from the
+  same section, and it stops that file from being suggested again.
 - **Protection** — for every file (by content hash), how many independent
   `mirror`-mode copies exist — locally, and on any other machine whose
   portable catalog you've imported (`mediavault catalog export`/`import`, or
