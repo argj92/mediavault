@@ -234,7 +234,11 @@ def roots_add(
         try:
             stats = scanner.scan_root(conn, RootConfig(label=label, path=expanded, role=role, mode=mode), hash_algo=config.hash_algo)
             msg = f"Added root '{label}': {stats['files_scanned']} files found."
-        except FileNotFoundError:
+        except OSError:
+            # Not reachable at all (FileNotFoundError) or dropped mid-walk
+            # (any other OSError -- see fix/scan-error-isolation) -- either
+            # way this is a best-effort immediate scan; the background
+            # worker will pick it up on its next cycle regardless.
             msg = f"Added root '{label}' — not reachable right now, will scan automatically once it is."
     return flash_redirect("#roots", msg)
 
