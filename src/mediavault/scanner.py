@@ -25,9 +25,22 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
     scan_id = db.start_scan(conn, root.label)
 
     stats = {"files_scanned": 0, "new_files": 0, "updated_files": 0, "missing_files": 0, "placeholders": 0}
+    last_progress_commit = time.monotonic()
 
     for entry in cloud.walk_cloud_aware(root.path):
         stats["files_scanned"] += 1
+
+        # A large library can take a long time to hash. Commit progress
+        # periodically (throttled to roughly once a second, not every file --
+        # fine whether files are few-and-huge or many-and-tiny) so another
+        # connection (the web UI) can show it's actually moving, and so an
+        # interrupted scan (crash, sleep, force-quit) only has to re-hash
+        # whatever wasn't committed yet, not start over from scratch.
+        now = time.monotonic()
+        if now - last_progress_commit >= 1.0:
+            db.update_scan_progress(conn, scan_id, stats["files_scanned"])
+            conn.commit()
+            last_progress_commit = now
 
         if not entry.downloaded:
             stats["placeholders"] += 1

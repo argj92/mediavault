@@ -1,8 +1,12 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} — MediaVault{% endblock %}
+{% block head %}{% if any_scan_active %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block content %}
 <h1>{{ machine }}</h1>
 <p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
+{% if any_scan_active %}
+<p class="subtle">A scan is in progress — this page refreshes itself every 5s while that's true.</p>
+{% endif %}
 
 <!-- ========================================================== LIBRARY -->
 <details id="library" class="section">
@@ -48,8 +52,9 @@
     <p class="subtle">A root is any folder this machine tracks. Exactly one root should be <b>primary</b> — the single basis every other root syncs against. Mark a folder <b>subset</b> (like an iCloud folder that only holds part of your library) so it's never treated as a deletion source, or <b>mirror</b> for a full backup copy.</p>
 
     <table>
-      <tr><th>Label</th><th>Role / Mode</th><th>Path</th><th>Enabled</th><th colspan="3">Actions</th></tr>
+      <tr><th>Label</th><th>Role / Mode</th><th>Path</th><th>Enabled</th><th>Scan status</th><th colspan="3">Actions</th></tr>
       {% for r in roots %}
+      {% set status = scan_status[r.label] %}
       <tr>
         <td>{{ r.label }}{% if r.role == 'primary' %} <span class="pill ok">basis</span>{% endif %}</td>
         <td>
@@ -70,6 +75,15 @@
         </td>
         <td class="path">{{ r.path }}</td>
         <td>{{ "yes" if r.enabled else "no" }}</td>
+        <td>
+          {% if status.active %}
+          <span class="pill warn">scanning… {{ status.active.files_scanned }} file(s) so far</span>
+          {% elif status.last_finished %}
+          <span class="subtle">last scanned {{ status.last_finished.finished_at|time_ago }} — {{ status.last_finished.files_scanned }} file(s)</span>
+          {% else %}
+          <span class="subtle">never scanned yet</span>
+          {% endif %}
+        </td>
         <td><form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form></td>
         <td><form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form></td>
         <td>
@@ -80,7 +94,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="subtle">No roots yet — add one below.</td></tr>
+      <tr><td colspan="8" class="subtle">No roots yet — add one below.</td></tr>
       {% endfor %}
     </table>
 

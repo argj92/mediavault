@@ -128,13 +128,36 @@ def connect(db_path: Path):
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
+    _ensure_wal_mode(conn)
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_wal_mode(conn: sqlite3.Connection) -> None:
+    # journal_mode is a property of the database FILE, not the connection --
+    # once set it persists, so almost every connection just confirms it and
+    # skips the write below. Only the very first connection ever made to a
+    # given db file needs to actually switch it, and that one SET can briefly
+    # collide with another process doing the exact same thing at the same
+    # instant (e.g. two mediavault instances launched together against a
+    # brand-new database) -- observed directly: "database is locked" raised
+    # from this statement, not from ordinary write contention busy_timeout
+    # already covers. A few short retries absorb that one-time race instead
+    # of crashing app startup outright.
+    if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+        return
+    for attempt in range(5):
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -285,6 +308,35 @@ def start_scan(conn: sqlite3.Connection, root_label: str) -> int:
         (root_label, time.time()),
     )
     return cur.lastrowid
+
+
+def update_scan_progress(conn: sqlite3.Connection, scan_id: int, files_scanned: int) -> None:
+    """Called periodically while a scan is still running (see scanner.py) so
+    a concurrent reader (the web UI) can show it's actually making progress,
+    not just show nothing until it finishes."""
+    conn.execute("UPDATE scans SET files_scanned=? WHERE id=?", (files_scanned, scan_id))
+
+
+def get_active_scan(conn: sqlite3.Connection, root_label: str, stale_after_seconds: float = 6 * 3600) -> sqlite3.Row | None:
+    """The in-progress scan for this root, if any (finished_at IS NULL). A
+    scan whose process crashed/was killed leaves its row stuck at
+    finished_at IS NULL forever -- treat one old enough as abandoned rather
+    than claim it's still running. 6h is generous on purpose: a real
+    multi-terabyte library can legitimately take that long."""
+    row = conn.execute(
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        (root_label,),
+    ).fetchone()
+    if row is not None and time.time() - row["started_at"] > stale_after_seconds:
+        return None
+    return row
+
+
+def get_last_finished_scan(conn: sqlite3.Connection, root_label: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+        (root_label,),
+    ).fetchone()
 
 
 def finish_scan(conn: sqlite3.Connection, scan_id: int, stats: dict) -> None:

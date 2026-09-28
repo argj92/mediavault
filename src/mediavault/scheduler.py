@@ -1,8 +1,11 @@
 """Keeps the local index fresh without the user having to remember to run
-anything: a full reconcile always runs once at process startup, and then a
-background thread reruns it on an interval, notifying only when something
+anything: a full reconcile runs immediately in the background when the app
+starts, and then on an interval after that, notifying only when something
 actually changed (new duplicates, a root drifting out of sync with the
-primary, new untracked media) rather than on every tick.
+primary, new untracked media) rather than on every tick. The first cycle
+runs in the background rather than blocking startup -- for a real library a
+full scan/hash can take a while, and nothing else (the GUI window opening,
+the web server answering any request) should have to wait on it.
 """
 from __future__ import annotations
 
@@ -116,9 +119,14 @@ class BackgroundWorker:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
-        # Run once, synchronously, before returning — startup should reflect
-        # a fresh scan, not stale data from last time the app ran.
-        self._run_cycle()
+        # _loop() runs a cycle immediately as its first action, so the first
+        # scan still happens right away -- just in the background, not here.
+        # Running it synchronously here used to block the whole app's startup
+        # (the GUI window, or the web server accepting any request at all)
+        # until every root was fully scanned/hashed, which for a real library
+        # can take minutes; worse, holding that long a write transaction open
+        # during startup is exactly what made a second concurrently-starting
+        # instance crash with "database is locked" instead of just waiting.
         self._thread = threading.Thread(target=self._loop, daemon=True, name="mediavault-worker")
         self._thread.start()
 
