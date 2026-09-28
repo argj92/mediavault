@@ -128,13 +128,36 @@ def connect(db_path: Path):
     conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
+    _ensure_wal_mode(conn)
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_wal_mode(conn: sqlite3.Connection) -> None:
+    # journal_mode is a property of the database FILE, not the connection --
+    # once set it persists, so almost every connection just confirms it and
+    # skips the write below. Only the very first connection ever made to a
+    # given db file needs to actually switch it, and that one SET can briefly
+    # collide with another process doing the exact same thing at the same
+    # instant (e.g. two mediavault instances launched together against a
+    # brand-new database) -- observed directly: "database is locked" raised
+    # from this statement, not from ordinary write contention busy_timeout
+    # already covers. A few short retries absorb that one-time race instead
+    # of crashing app startup outright.
+    if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+        return
+    for attempt in range(5):
+        try:
+            conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(0.2)
 
 
 def init_db(conn: sqlite3.Connection) -> None:

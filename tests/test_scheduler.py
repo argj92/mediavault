@@ -69,3 +69,38 @@ def test_reconcile_survives_mid_scan_disconnect(conn, tmp_path, monkeypatch):
     # The good root should still have been scanned despite flaky's disconnect.
     row = db.get_file(conn, good.label, "Movie.mkv")
     assert row is not None
+
+
+def test_background_worker_start_does_not_block_on_first_cycle(tmp_path, monkeypatch):
+    """start() used to run the first reconcile synchronously, so anything
+    waiting on the app to finish starting (the GUI window, the web server
+    answering a request) blocked for however long a real library takes to
+    scan/hash -- and held a single long write transaction open the whole
+    time, which is what made a second concurrently-starting instance crash
+    with "database is locked" instead of just waiting a bit. start() must
+    return quickly regardless of how slow a cycle is."""
+    import threading
+    import time
+
+    config = make_config(tmp_path)
+    worker = scheduler.BackgroundWorker(config)
+
+    cycle_started = threading.Event()
+    release_cycle = threading.Event()
+
+    def slow_cycle():
+        cycle_started.set()
+        release_cycle.wait(timeout=5)
+        return {}
+
+    monkeypatch.setattr(worker, "_run_cycle", slow_cycle)
+
+    start = time.monotonic()
+    worker.start()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0, f"start() blocked for {elapsed:.2f}s instead of returning immediately"
+    assert cycle_started.wait(timeout=2), "the first cycle should still run, just in the background"
+
+    release_cycle.set()
+    worker.stop()

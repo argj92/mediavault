@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
         db.init_db(conn)
         seed_roots_if_empty(conn, config)
     worker = scheduler.BackgroundWorker(config)
-    worker.start()  # blocks briefly for one synchronous reconcile, then backgrounds
+    worker.start()  # kicks off the first scan in the background; doesn't block startup
     app.state.worker = worker
     yield
     worker.stop()
