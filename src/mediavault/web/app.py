@@ -253,7 +253,10 @@ def roots_scan(request: Request, label: str):
         try:
             stats = scanner.scan_root(conn, root, hash_algo=config.hash_algo)
             msg = f"Scanned '{label}': {stats['files_scanned']} files, {stats['new_files']} new, {stats['updated_files']} updated."
-        except FileNotFoundError as exc:
+        except OSError as exc:
+            # Not mounted at all (FileNotFoundError) or dropped mid-walk
+            # (any other OSError -- stale SMB/NFS handle, sleep/wake) --
+            # either way, report it gracefully instead of a raw 500.
             msg = f"Could not scan '{label}': {exc}"
     return flash_redirect("#roots", msg)
 
