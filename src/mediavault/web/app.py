@@ -10,6 +10,7 @@ import platform
 import shutil
 import sqlite3
 import subprocess
+import time
 import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -54,7 +55,21 @@ def human_bytes(n) -> str:
     return f"{n:.1f} PB"
 
 
+def time_ago(unix_ts) -> str:
+    if unix_ts is None:
+        return "never"
+    seconds = max(0, time.time() - unix_ts)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
 templates.env.filters["human_bytes"] = human_bytes
+templates.env.filters["time_ago"] = time_ago
 
 
 def get_config(request: Request) -> AppConfig:
@@ -92,6 +107,14 @@ def index(request: Request, msg: str | None = None):
     config = get_config(request)
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
+        scan_status = {}
+        for r in roots:
+            active = db.get_active_scan(conn, r["label"])
+            scan_status[r["label"]] = {
+                "active": active,
+                "last_finished": None if active else db.get_last_finished_scan(conn, r["label"]),
+            }
+        any_scan_active = any(s["active"] for s in scan_status.values())
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
         dup_groups = dedupe.find_duplicates(conn)
@@ -140,6 +163,8 @@ def index(request: Request, msg: str | None = None):
             "machine": config.machine,
             "scan_interval": config.scan_interval_minutes,
             "roots": roots,
+            "scan_status": scan_status,
+            "any_scan_active": any_scan_active,
             "has_primary": has_primary,
             "total_files": total_files,
             "total_bytes": total_bytes,

@@ -310,6 +310,35 @@ def start_scan(conn: sqlite3.Connection, root_label: str) -> int:
     return cur.lastrowid
 
 
+def update_scan_progress(conn: sqlite3.Connection, scan_id: int, files_scanned: int) -> None:
+    """Called periodically while a scan is still running (see scanner.py) so
+    a concurrent reader (the web UI) can show it's actually making progress,
+    not just show nothing until it finishes."""
+    conn.execute("UPDATE scans SET files_scanned=? WHERE id=?", (files_scanned, scan_id))
+
+
+def get_active_scan(conn: sqlite3.Connection, root_label: str, stale_after_seconds: float = 6 * 3600) -> sqlite3.Row | None:
+    """The in-progress scan for this root, if any (finished_at IS NULL). A
+    scan whose process crashed/was killed leaves its row stuck at
+    finished_at IS NULL forever -- treat one old enough as abandoned rather
+    than claim it's still running. 6h is generous on purpose: a real
+    multi-terabyte library can legitimately take that long."""
+    row = conn.execute(
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        (root_label,),
+    ).fetchone()
+    if row is not None and time.time() - row["started_at"] > stale_after_seconds:
+        return None
+    return row
+
+
+def get_last_finished_scan(conn: sqlite3.Connection, root_label: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+        (root_label,),
+    ).fetchone()
+
+
 def finish_scan(conn: sqlite3.Connection, scan_id: int, stats: dict) -> None:
     conn.execute(
         """UPDATE scans SET finished_at=?, files_scanned=?, new_files=?, updated_files=?,
