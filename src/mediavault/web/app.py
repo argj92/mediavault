@@ -5,6 +5,7 @@ ways to launch it.
 from __future__ import annotations
 
 import json
+import mimetypes
 import platform
 import shutil
 import sqlite3
@@ -13,12 +14,12 @@ import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import catalog, cloud, db, dedupe, metadata, protection, recycle_bin, scheduler, suggestions, sync
+from .. import browse, catalog, cloud, db, dedupe, metadata, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 
 BASE_DIR = Path(__file__).parent
@@ -117,6 +118,14 @@ def index(request: Request, msg: str | None = None):
         protection_report = protection.compute_protection(conn, config.machine)
         remote_catalogs = db.list_remote_catalogs(conn)
 
+        library_roots = []
+        for r in roots:
+            if not r["enabled"] or r["role"] == "inbox":
+                continue
+            files = db.all_files(conn, root_label=r["label"])
+            tree = browse.build_tree(files, config.video_extensions)
+            library_roots.append({"root": r, "tree": tree, "video_count": tree.total_videos()})
+
     has_primary = any(r["role"] == "primary" and r["enabled"] for r in roots)
     trash_scan = recycle_bin.scan_trash(top_n=50)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
@@ -147,6 +156,7 @@ def index(request: Request, msg: str | None = None):
             "trash_access_errors": trash_scan["access_errors"],
             "protection_report": protection_report,
             "remote_catalogs": remote_catalogs,
+            "library_roots": library_roots,
         },
     )
 
@@ -385,6 +395,44 @@ def quarantine_purge(request: Request, qid: int, confirm: str = Form(...)):
         Path(q["quarantined_path"]).unlink(missing_ok=True)
         db.remove_quarantine_record(conn, qid)
     return flash_redirect("#recycle-bin", "Permanently deleted.")
+
+
+# ------------------------------------------------------------------- library
+
+@app.get("/play/{file_id}")
+def play_file(file_id: int, request: Request):
+    """Streams a tracked video file for the browser's <video> element (Range
+    requests are handled by FileResponse, so seeking/scrubbing works). Refuses
+    anything missing, a placeholder, not a video extension, or hidden from
+    browsing (dot-prefixed folder or under a .mediavault-hide marker) -- the
+    same rule the Library section itself uses to decide what to show."""
+    config = get_config(request)
+    with get_conn(request) as conn:
+        file_row = db.get_file_by_id(conn, file_id)
+        if file_row is None or file_row["missing"] or file_row["is_placeholder"]:
+            raise HTTPException(404, "File not tracked or not currently present.")
+
+        root_row = db.get_root(conn, file_row["root_label"])
+        if root_row is None or not root_row["enabled"]:
+            raise HTTPException(404, "Root not tracked.")
+
+        rel_path = file_row["rel_path"]
+        if Path(rel_path).suffix.lower() not in {e.lower() for e in config.video_extensions}:
+            raise HTTPException(404, "Not a video file.")
+
+        marker_rows = conn.execute(
+            "SELECT rel_path FROM files WHERE root_label=? AND missing=0", (root_row["label"],)
+        ).fetchall()
+        hidden_marker_folders = browse.marker_folders([r["rel_path"] for r in marker_rows])
+        if browse.is_hidden(rel_path, hidden_marker_folders):
+            raise HTTPException(404, "This file is in a hidden folder.")
+
+    full_path = Path(root_row["path"]) / rel_path
+    if not full_path.exists():
+        raise HTTPException(404, "File isn't currently reachable on disk (root unmounted?).")
+
+    media_type = mimetypes.guess_type(full_path.name)[0] or "application/octet-stream"
+    return FileResponse(full_path, media_type=media_type, filename=full_path.name)
 
 
 # ------------------------------------------------------------------ metadata

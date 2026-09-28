@@ -4,6 +4,43 @@
 <h1>{{ machine }}</h1>
 <p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
 
+<!-- ========================================================== LIBRARY -->
+<details id="library" class="section">
+  <summary>Library <span class="count">{{ library_roots|sum(attribute='video_count') }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Browse and play video files across every tracked root, by folder. A folder starting with "." or containing a <code>.mediavault-hide</code> marker file is left out of this view — it's still fully scanned, synced, and deduped, just not shown here.</p>
+
+    {% if not library_roots %}
+    <p class="subtle">No browsable roots yet — add one under Roots below.</p>
+    {% endif %}
+
+    {% macro render_folder(node) %}
+      {% for f in node.sorted_files() %}
+      <div class="video-row">
+        <button type="button" class="play-btn" onclick="mvPlay(this, {{ f.id }})">&#9654; {{ f.rel_path.split('/')[-1] }}</button>
+        <span class="subtle">{{ f.size|human_bytes }}</span>
+      </div>
+      <div class="video-player"></div>
+      {% endfor %}
+      {% for child in node.sorted_folders() %}
+      <details class="subsection">
+        <summary>&#128193; {{ child.name }} <span class="count">{{ child.total_videos() }}</span></summary>
+        <div class="section-body">
+          {{ render_folder(child) }}
+        </div>
+      </details>
+      {% endfor %}
+    {% endmacro %}
+
+    {% for lr in library_roots %}
+    <div class="group">
+      <div class="group-head">{{ lr.root.label }} <span class="pill ok">{{ lr.video_count }} video(s)</span></div>
+      {{ render_folder(lr.tree) }}
+    </div>
+    {% endfor %}
+  </div>
+</details>
+
 <!-- ============================================================ ROOTS -->
 <details id="roots" open class="section">
   <summary>Roots <span class="count">{{ roots|length }}</span></summary>
@@ -360,6 +397,22 @@
 {% endif %}
 
 <script>
+function mvPlay(btn, fileId) {
+  const player = btn.parentElement.nextElementSibling;
+  if (player.dataset.open === '1') {
+    player.innerHTML = '';
+    player.dataset.open = '0';
+    btn.textContent = btn.textContent.replace('■', '▶');
+    return;
+  }
+  player.innerHTML = '<video controls autoplay style="max-width:100%;border-radius:8px;" '
+    + 'src="/play/' + fileId + '"></video>'
+    + '<p class="subtle">If nothing plays, your browser likely can\'t decode this file\'s codec/container '
+    + '(common for .mkv/.avi/.wmv) — this streams the raw file as-is, no transcoding.</p>';
+  player.dataset.open = '1';
+  btn.textContent = btn.textContent.replace('▶', '■');
+}
+
 document.getElementById('browse-btn').addEventListener('click', async () => {
   const btn = document.getElementById('browse-btn');
   const original = btn.textContent;
