@@ -193,10 +193,7 @@ def index(request: Request, msg: str | None = None):
         ignored_promotions = db.list_ignored_promotions(conn)
         untracked = suggestions.untracked_media(conn, config.video_extensions)
         quarantine_items = db.list_quarantine(conn)
-        metadata_files = conn.execute(
-            "SELECT * FROM files WHERE missing=0 AND is_placeholder=0 AND title_guess IS NULL "
-            "AND root_label IN (SELECT label FROM roots WHERE role != 'inbox') LIMIT 100"
-        ).fetchall()
+        metadata_files = metadata.files_needing_guess(conn, config.video_extensions)
 
         icloud_summaries = []
         for r in roots:
