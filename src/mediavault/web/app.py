@@ -220,11 +220,27 @@ def roots_add(
 ):
     expanded = Path(path).expanduser()
     label = label.strip()
+    config = get_config(request)
     with get_conn(request) as conn:
         if role == "primary" and db.count_primary_roots(conn, exclude_label=label) > 0:
             return flash_redirect("#roots", _PRIMARY_CONFLICT_MSG)
         db.upsert_root(conn, label, str(expanded), role, mode)
-    return flash_redirect("#roots", f"Added root '{label}'. It'll be picked up on the next scan cycle.")
+
+        # Scan it right away rather than making the user wait up to
+        # scan_interval_minutes (or remember to click "Scan now") just to see
+        # a root they only just added.
+        from .. import scanner
+
+        try:
+            stats = scanner.scan_root(conn, RootConfig(label=label, path=expanded, role=role, mode=mode), hash_algo=config.hash_algo)
+            msg = f"Added root '{label}': {stats['files_scanned']} files found."
+        except OSError:
+            # Not reachable at all (FileNotFoundError) or dropped mid-walk
+            # (any other OSError -- see fix/scan-error-isolation) -- either
+            # way this is a best-effort immediate scan; the background
+            # worker will pick it up on its next cycle regardless.
+            msg = f"Added root '{label}' — not reachable right now, will scan automatically once it is."
+    return flash_redirect("#roots", msg)
 
 
 @app.post("/roots/{label}/update")

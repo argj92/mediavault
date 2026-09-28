@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 
 import uvicorn
 
@@ -33,6 +34,17 @@ def run_gui(config: AppConfig) -> None:
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
+
+    # server.started only flips true once uvicorn has bound the socket AND
+    # our FastAPI lifespan startup (db init, seeding, background worker) has
+    # finished. Pointing the window at the URL before that races the server:
+    # the request fails, and pywebview never retries -- just shows a blank
+    # window forever.
+    deadline = time.monotonic() + 15
+    while not server.started:
+        if time.monotonic() > deadline:
+            raise SystemExit("mediavault gui: the local server didn't start within 15s.")
+        time.sleep(0.05)
 
     webview.create_window("MediaVault", f"http://127.0.0.1:{port}", width=1150, height=800)
     webview.start()

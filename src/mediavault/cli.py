@@ -415,6 +415,18 @@ def gui():
     run_gui(config)
 
 
+def web_entry() -> None:
+    """Console-script entry point for the standalone `mediavault-web` command
+    (same as `mediavault web`, so it still takes --host/--port/--open-browser)."""
+    typer.run(web)
+
+
+def gui_entry() -> None:
+    """Console-script entry point for the standalone `mediavault-gui` command
+    (same as `mediavault gui`)."""
+    typer.run(gui)
+
+
 # ------------------------------------------------------------------- service
 
 @service_app.command("install")

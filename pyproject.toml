@@ -23,6 +23,8 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 mediavault = "mediavault.cli:app"
+mediavault-web = "mediavault.cli:web_entry"
+mediavault-gui = "mediavault.cli:gui_entry"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
