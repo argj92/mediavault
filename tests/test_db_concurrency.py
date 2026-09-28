@@ -25,6 +25,7 @@ before any scan even started. db._ensure_wal_mode now checks the mode first
 contention instead of propagating immediately.
 """
 import sqlite3
+import threading
 import time
 
 from mediavault import db
@@ -99,3 +100,38 @@ def test_ensure_wal_mode_retries_through_transient_contention(tmp_path, monkeypa
 
     assert attempts["n"] == 3
     real_conn.close()
+
+
+def test_upsert_file_survives_two_connections_racing_on_the_same_new_file(tmp_path):
+    """Reproduced from a real crash: two mediavault instances (`web` and
+    `gui`) scanning the same root concurrently can both see 'no existing
+    row' for the same brand-new file and both try to INSERT it, and the
+    loser used to hit sqlite3.IntegrityError: UNIQUE constraint failed on
+    (root_label, rel_path). upsert_file is now a single atomic
+    INSERT ... ON CONFLICT DO UPDATE, so this must no longer be possible."""
+    db_path = tmp_path / "mediavault.db"
+    with db.connect(db_path) as conn:
+        db.init_db(conn)
+
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def race():
+        try:
+            with db.connect(db_path) as conn:
+                barrier.wait(timeout=5)  # line both threads up at the same instant
+                db.upsert_file(conn, "root", "Movie.mkv", 100, 1.0, "sha256:abc", False)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t1 = threading.Thread(target=race)
+    t2 = threading.Thread(target=race)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not errors, f"concurrent upsert_file raised: {errors}"
+    with db.connect(db_path) as conn:
+        rows = conn.execute("SELECT COUNT(*) AS n FROM files WHERE root_label='root' AND rel_path='Movie.mkv'").fetchone()
+    assert rows["n"] == 1  # exactly one row, not a duplicate and not a crash

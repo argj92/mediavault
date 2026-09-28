@@ -374,20 +374,22 @@ def upsert_file(
     hash_: str | None,
     is_placeholder: bool,
 ) -> None:
+    # A single atomic statement, not a check-then-INSERT-or-UPDATE: two
+    # connections scanning the same root concurrently (e.g. `mediavault web`
+    # and `mediavault gui` both pointed at the same config) can otherwise
+    # both see "no existing row" for the same file and both try to INSERT,
+    # and the second one hits the UNIQUE(root_label, rel_path) constraint --
+    # reproduced directly from a real crash. ON CONFLICT makes whichever
+    # commits first win the insert and the other just update the same row.
     now = time.time()
-    existing = get_file(conn, root_label, rel_path)
-    if existing is None:
-        conn.execute(
-            """INSERT INTO files (root_label, rel_path, size, mtime, hash, is_placeholder,
-               missing, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-            (root_label, rel_path, size, mtime, hash_, int(is_placeholder), now, now),
-        )
-    else:
-        conn.execute(
-            """UPDATE files SET size=?, mtime=?, hash=?, is_placeholder=?, missing=0, last_seen=?
-               WHERE id=?""",
-            (size, mtime, hash_, int(is_placeholder), now, existing["id"]),
-        )
+    conn.execute(
+        """INSERT INTO files (root_label, rel_path, size, mtime, hash, is_placeholder,
+           missing, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+           ON CONFLICT(root_label, rel_path) DO UPDATE SET
+               size=excluded.size, mtime=excluded.mtime, hash=excluded.hash,
+               is_placeholder=excluded.is_placeholder, missing=0, last_seen=excluded.last_seen""",
+        (root_label, rel_path, size, mtime, hash_, int(is_placeholder), now, now),
+    )
 
 
 def mark_missing(conn: sqlite3.Connection, root_label: str, scan_started_at: float) -> int:
