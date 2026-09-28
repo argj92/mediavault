@@ -26,6 +26,23 @@ video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts"]
 # once at startup so the local index is fresh before you look at anything.
 scan_interval_minutes: 15
 
+# Opt-in: lets this machine find and pair with other mediavault instances on
+# your network (same LAN via mDNS, or anywhere on your Tailscale tailnet) so
+# Protection's cross-machine catalog exchange can happen automatically
+# instead of moving a JSON file by hand. Off by default because it starts a
+# second, small server reachable from your network (not just 127.0.0.1) —
+# see the Peers section in the UI, and src/mediavault/peer_api.py for
+# exactly what that server does and doesn't expose. Nothing is ever shared
+# with another machine until you explicitly pair with it (a code confirmed
+# on both sides), regardless of this setting.
+enable_lan_discovery: false
+
+# Port for the peer-to-peer service above. Only used when
+# enable_lan_discovery is true. Change it if 8421 is already taken on this
+# machine, or if you're running two instances on one machine (see the
+# `peer_port` used in tests for an example).
+peer_port: 8421
+
 # Folders themselves are NOT configured here — they're live state kept in
 # this machine's SQLite index (db_path above) so you can add, edit, or
 # remove them from the CLI or the web/desktop UI without editing YAML or

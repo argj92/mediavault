@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import catalog, dedupe, db, protection, recycle_bin, scanner, suggestions, sync
+from . import catalog, dedupe, db, peers as peers_module, protection, recycle_bin, scanner, suggestions, sync
 from .config import AppConfig, ConfigError, RootConfig, load_config
 
 app = typer.Typer(help="MediaVault — cross-machine movie/TV library manager.")
@@ -18,10 +18,12 @@ root_app = typer.Typer(help="Manage tracked folders (roots) on this machine.")
 trash_app = typer.Typer(help="Inspect and clean up the OS trash / recycle bin.")
 service_app = typer.Typer(help="Run mediavault as an always-on background service (launchd/systemd).")
 catalog_app = typer.Typer(help="Export/import portable per-machine catalogs for cross-machine protection tracking.")
+peers_app = typer.Typer(help="Discover and pair with other mediavault instances on your network (opt-in).")
 app.add_typer(root_app, name="root")
 app.add_typer(trash_app, name="trash")
 app.add_typer(service_app, name="service")
 app.add_typer(catalog_app, name="catalog")
+app.add_typer(peers_app, name="peers")
 
 console = Console()
 
@@ -460,6 +462,138 @@ def service_status():
     from . import service
 
     console.print(service.status())
+
+
+# ----------------------------------------------------------------------- peers
+
+@peers_app.command("list")
+def peers_list():
+    """Show paired peers and any incoming pairing requests awaiting a decision."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        known = db.list_known_peers(conn)
+        pending = db.list_pending_pairings(conn)
+
+    table = Table("Machine", "Peer ID", "Paired", "Last synced")
+    for p in known:
+        synced = time.strftime("%Y-%m-%d %H:%M", time.localtime(p["last_synced_at"])) if p["last_synced_at"] else "never"
+        table.add_row(p["machine_name"], p["peer_id"][:12], "yes" if p["paired"] else "pairing in progress", synced)
+    console.print(table)
+
+    if pending:
+        console.print("\n[yellow]Incoming pairing requests:[/yellow]")
+        for p in pending:
+            console.print(f"  {p['machine_name']} (peer_id {p['peer_id'][:12]}...) — code: {p['code']}")
+        console.print("Confirm the code matches what's shown on that machine, then `mediavault peers accept <peer_id>`.")
+
+
+@peers_app.command("discover")
+def peers_discover(seconds: int = typer.Option(5, help="how long to listen for mDNS announcements")):
+    """One-shot: listen for other mediavault instances on the same LAN."""
+    from zeroconf import Zeroconf
+
+    from .discovery import Browser
+
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        own_peer_id = db.get_or_create_peer_id(conn)
+
+    zc = Zeroconf()
+    browser = Browser(zc, own_peer_id)
+    browser.start()
+    console.print(f"Listening for {seconds}s...")
+    time.sleep(seconds)
+    found = browser.list_peers()
+    browser.stop()
+    zc.close()
+
+    table = Table("Machine", "Address", "Port", "Peer ID")
+    for p in found:
+        table.add_row(p.machine_name, p.address, str(p.port), p.peer_id[:12])
+    console.print(table)
+    if not found:
+        console.print("[yellow]Nothing found. The other machine needs enable_lan_discovery: true and to be running "
+                       "`mediavault web`/`gui` right now.[/yellow]")
+
+
+@peers_app.command("discover-tailscale")
+def peers_discover_tailscale():
+    """Probe every online device on your Tailscale tailnet for a reachable mediavault peer API."""
+    from . import tailscale
+
+    config = _load()
+    if not tailscale.is_available():
+        console.print("[red]The `tailscale` CLI isn't installed on this machine.[/red]")
+        raise typer.Exit(1)
+    found = tailscale.discover_tailnet_candidates(config.peer_port)
+    table = Table("Machine", "Address", "Peer ID")
+    for p in found:
+        table.add_row(p.machine_name, p.address, p.peer_id[:12])
+    console.print(table)
+
+
+@peers_app.command("pair")
+def peers_pair(peer_id: str, machine_name: str, address: str, port: int = 8421):
+    """Initiate pairing with a peer (get its details from `peers discover`/`discover-tailscale`)."""
+    from .discovery import PeerInfo
+
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        try:
+            code = peers_module.initiate_pairing(conn, config, PeerInfo(peer_id=peer_id, machine_name=machine_name, address=address, port=port))
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not reach {machine_name}: {exc}[/red]")
+            raise typer.Exit(1)
+    console.print(f"[green]Pairing code: {code}[/green] — confirm it matches what's shown on {machine_name}, "
+                  f"then run `mediavault peers accept {peer_id}` there.")
+
+
+@peers_app.command("accept")
+def peers_accept(peer_id: str):
+    """Accept a pending incoming pairing request (after confirming the code matches)."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        try:
+            peers_module.accept_pending_pairing(conn, config, peer_id)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not complete pairing: {exc}[/red]")
+            raise typer.Exit(1)
+    console.print("[green]Paired.[/green]")
+
+
+@peers_app.command("reject")
+def peers_reject(peer_id: str):
+    """Reject a pending incoming pairing request."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        peers_module.reject_pending_pairing(conn, peer_id)
+    console.print("[green]Rejected.[/green]")
+
+
+@peers_app.command("sync")
+def peers_sync(peer_id: str):
+    """Fetch and import a paired peer's catalog."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        peer_row = db.get_known_peer(conn, peer_id)
+        if peer_row is None:
+            console.print(f"[red]No such peer '{peer_id}'[/red]")
+            raise typer.Exit(1)
+        try:
+            n = peers_module.sync_with_peer(conn, config, peer_row)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[red]Could not sync with {peer_row['machine_name']}: {exc}[/red]")
+            raise typer.Exit(1)
+    console.print(f"[green]Imported {n} file(s) from {peer_row['machine_name']}.[/green]")
+
+
+@peers_app.command("remove")
+def peers_remove(peer_id: str):
+    """Unpair from a peer."""
+    config = _load()
+    with db.connect(config.db_path) as conn:
+        db.remove_known_peer(conn, peer_id)
+    console.print("[green]Removed.[/green]")
 
 
 if __name__ == "__main__":
