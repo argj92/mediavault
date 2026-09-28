@@ -19,10 +19,62 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import browse, catalog, cloud, db, dedupe, metadata, protection, recycle_bin, scheduler, suggestions, sync
+from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 
 BASE_DIR = Path(__file__).parent
+
+
+def _start_lan_discovery(app: FastAPI, config: AppConfig) -> dict:
+    """Opt-in (config.enable_lan_discovery): starts the separate, narrow
+    peer_api server bound to all interfaces (not just 127.0.0.1 — this is
+    the one deliberate exception, see peer_api.py's own docstring for why
+    it's safe), plus mDNS advertise/browse so other mediavault instances on
+    the LAN show up automatically. Returns the pieces so lifespan can clean
+    them up on shutdown.
+
+    zeroconf's own synchronous calls (register_service/ServiceBrowser) must
+    run on a thread that ISN'T already running an asyncio event loop --
+    calling them directly from this coroutine (uvicorn's own loop thread)
+    raises zeroconf._exceptions.EventLoopBlocked. Found by actually starting
+    the app with this enabled, not by reasoning about it -- so the whole
+    zeroconf setup happens in its own plain thread instead."""
+    import threading
+
+    import uvicorn
+
+    from .. import peer_api
+
+    with db.connect(config.db_path) as conn:
+        own_peer_id = db.get_or_create_peer_id(conn)
+
+    peer_api.app.state.config = config
+    uvicorn_config = uvicorn.Config(peer_api.app, host="0.0.0.0", port=config.peer_port, log_level="warning")
+    peer_server = uvicorn.Server(uvicorn_config)
+    peer_thread = threading.Thread(target=peer_server.run, daemon=True)
+    peer_thread.start()
+
+    state: dict = {"peer_server": peer_server, "zc": None, "advertiser": None, "browser": None}
+
+    def _setup_zeroconf() -> None:
+        from zeroconf import Zeroconf
+
+        from ..discovery import Advertiser, Browser
+
+        zc = Zeroconf()
+        advertiser = Advertiser(zc, config.machine, own_peer_id, config.peer_port)
+        advertiser.start()
+        browser = Browser(zc, own_peer_id)
+        browser.start()
+        state["zc"], state["advertiser"], state["browser"] = zc, advertiser, browser
+        app.state.browser = browser
+
+    zc_thread = threading.Thread(target=_setup_zeroconf, daemon=True)
+    zc_thread.start()
+    zc_thread.join(timeout=10)  # so app.state.browser is set before we return, for the common case
+
+    app.state.own_peer_id = own_peer_id
+    return state
 
 
 @asynccontextmanager
@@ -34,8 +86,20 @@ async def lifespan(app: FastAPI):
     worker = scheduler.BackgroundWorker(config)
     worker.start()  # blocks briefly for one synchronous reconcile, then backgrounds
     app.state.worker = worker
+
+    lan = _start_lan_discovery(app, config) if config.enable_lan_discovery else None
+
     yield
+
     worker.stop()
+    if lan:
+        if lan["advertiser"]:
+            lan["advertiser"].stop()
+        if lan["browser"]:
+            lan["browser"].stop()
+        if lan["zc"]:
+            lan["zc"].close()
+        lan["peer_server"].should_exit = True
 
 
 app = FastAPI(title="MediaVault", lifespan=lifespan)
@@ -120,6 +184,9 @@ def index(request: Request, msg: str | None = None):
         protection_report = protection.compute_protection(conn, config.machine)
         remote_catalogs = db.list_remote_catalogs(conn)
 
+        known_peers = db.list_known_peers(conn)
+        pending_pairings = db.list_pending_pairings(conn)
+
         library_roots = []
         for r in roots:
             if not r["enabled"] or r["role"] == "inbox":
@@ -131,6 +198,18 @@ def index(request: Request, msg: str | None = None):
     has_primary = any(r["role"] == "primary" and r["enabled"] for r in roots)
     trash_scan = recycle_bin.scan_trash(top_n=50)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
+
+    paired_peer_ids = {p["peer_id"] for p in known_peers if p["paired"]}
+    browser = getattr(request.app.state, "browser", None)
+    mdns_peers = browser.list_peers() if browser is not None else []
+    tailscale_candidates = getattr(request.app.state, "tailscale_candidates", [])
+    seen_ids = set()
+    discovered_peers = []
+    for p in [*mdns_peers, *tailscale_candidates]:
+        if p.peer_id in seen_ids or p.peer_id in paired_peer_ids:
+            continue
+        seen_ids.add(p.peer_id)
+        discovered_peers.append(p)
 
     return templates.TemplateResponse(
         request,
@@ -161,6 +240,10 @@ def index(request: Request, msg: str | None = None):
             "library_roots": library_roots,
             "promote_candidates": promote_candidates,
             "ignored_promotions": ignored_promotions,
+            "lan_discovery_enabled": config.enable_lan_discovery,
+            "known_peers": known_peers,
+            "pending_pairings": pending_pairings,
+            "discovered_peers": discovered_peers,
         },
     )
 
@@ -581,3 +664,73 @@ def catalog_remove_route(request: Request, machine: str):
     with get_conn(request) as conn:
         db.remove_remote_catalog(conn, machine)
     return flash_redirect("#protection", f"Removed catalog for '{machine}'.")
+
+
+# ---------------------------------------------------------------------- peers
+# Discovery (mDNS, always-on when enabled; Tailscale, probed on demand since
+# it's a live network round-trip per device) feeds candidates into the same
+# mutual-pairing handshake (peers.py) regardless of source. Nothing here is
+# reachable from the LAN — that's peer_api.py's job, on a separate port.
+
+@app.post("/peers/discover-tailscale")
+def peers_discover_tailscale(request: Request):
+    from .. import tailscale
+
+    config = get_config(request)
+    if not tailscale.is_available():
+        return flash_redirect("#peers", "Tailscale isn't installed on this machine.")
+    found = tailscale.discover_tailnet_candidates(config.peer_port)
+    request.app.state.tailscale_candidates = found
+    return flash_redirect("#peers", f"Found {len(found)} mediavault instance(s) on your tailnet.")
+
+
+@app.post("/peers/pair")
+def peers_pair(request: Request, peer_id: str = Form(...), machine_name: str = Form(...), address: str = Form(...), port: int = Form(...)):
+    from ..discovery import PeerInfo
+
+    config = get_config(request)
+    with get_conn(request) as conn:
+        try:
+            code = peers.initiate_pairing(conn, config, PeerInfo(peer_id=peer_id, machine_name=machine_name, address=address, port=port))
+        except Exception as exc:  # noqa: BLE001 — network call to another machine, many ways to fail
+            return flash_redirect("#peers", f"Could not reach {machine_name}: {exc}")
+    return flash_redirect("#peers", f"Pairing code: {code} — confirm it matches what's shown on {machine_name}, then accept it there.")
+
+
+@app.post("/peers/{peer_id}/accept")
+def peers_accept(request: Request, peer_id: str):
+    config = get_config(request)
+    with get_conn(request) as conn:
+        try:
+            peers.accept_pending_pairing(conn, config, peer_id)
+        except Exception as exc:  # noqa: BLE001
+            return flash_redirect("#peers", f"Could not complete pairing: {exc}")
+    return flash_redirect("#peers", "Paired.")
+
+
+@app.post("/peers/{peer_id}/reject")
+def peers_reject(request: Request, peer_id: str):
+    with get_conn(request) as conn:
+        peers.reject_pending_pairing(conn, peer_id)
+    return flash_redirect("#peers", "Rejected.")
+
+
+@app.post("/peers/{peer_id}/sync")
+def peers_sync(request: Request, peer_id: str):
+    config = get_config(request)
+    with get_conn(request) as conn:
+        peer_row = db.get_known_peer(conn, peer_id)
+        if peer_row is None:
+            return flash_redirect("#peers", "No such peer.")
+        try:
+            n = peers.sync_with_peer(conn, config, peer_row)
+        except Exception as exc:  # noqa: BLE001
+            return flash_redirect("#peers", f"Could not sync with {peer_row['machine_name']}: {exc}")
+    return flash_redirect("#peers", f"Imported {n} file(s) from {peer_row['machine_name']}.")
+
+
+@app.post("/peers/{peer_id}/remove")
+def peers_remove(request: Request, peer_id: str):
+    with get_conn(request) as conn:
+        db.remove_known_peer(conn, peer_id)
+    return flash_redirect("#peers", "Removed.")

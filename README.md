@@ -56,6 +56,16 @@ these (click a section to expand/collapse it; the top nav just jumps to one):
   folder, a USB drive) — no network access between machines required, so
   this works even for a second machine that isn't mounted or on the same
   network right now.
+- **Peers** *(opt-in — `enable_lan_discovery: true` in config.yaml)* —
+  automates that catalog exchange: finds other mediavault instances on the
+  same LAN (mDNS/Bonjour) or anywhere on your Tailscale tailnet, and lets you
+  pair with one explicitly (a code shown on both machines, confirmed on
+  both) before anything is ever shared. Once paired, "Sync now" fetches that
+  machine's catalog directly instead of moving a file by hand. Turning this
+  on starts one small, separate, read-only service reachable from your
+  network (never the main management UI, which always stays on
+  127.0.0.1 only) — see `src/mediavault/peer_api.py` for exactly what it
+  does and doesn't expose.
 - **Duplicates** — identical content (by hash) found anywhere across every
   tracked root. Removing a copy quarantines it (see Recycle Bin) rather than
   deleting it outright.

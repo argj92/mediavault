@@ -281,6 +281,73 @@
   </div>
 </details>
 
+<!-- ============================================================= PEERS -->
+<details id="peers" class="section">
+  <summary>Peers <span class="count">{{ known_peers|selectattr('paired')|list|length }}</span></summary>
+  <div class="section-body">
+    <p class="subtle">Other mediavault instances on your network, found automatically on the same LAN (mDNS) or by checking your Tailscale tailnet — either way, nothing is shared until you explicitly pair, with a code confirmed on both machines. Once paired, "Sync now" fetches that machine's catalog directly (same data as Protection's import, just automatic instead of moving a file by hand).</p>
+
+    {% if not lan_discovery_enabled %}
+    <p class="subtle">Not enabled on this machine. Set <code>enable_lan_discovery: true</code> in <code>config.yaml</code> and restart to turn this on — it starts a small, separate, read-only service reachable from your network (not the main UI, which stays local-only).</p>
+    {% else %}
+
+    {% if pending_pairings %}
+    <h3>Incoming requests</h3>
+    {% for p in pending_pairings %}
+    <div class="group">
+      <div class="group-head">{{ p.machine_name }} <span class="pill warn">code: {{ p.code }}</span></div>
+      <p class="subtle">Confirm this code matches what's shown on {{ p.machine_name }}'s own screen before accepting.</p>
+      <form method="post" action="/peers/{{ p.peer_id }}/accept"><button>Accept</button></form>
+      <form method="post" action="/peers/{{ p.peer_id }}/reject"><button class="danger">Reject</button></form>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <h3>Discovered</h3>
+    <form method="post" action="/peers/discover-tailscale"><button>Check Tailscale for peers</button></form>
+    <table>
+      <tr><th>Machine</th><th>Address</th><th></th></tr>
+      {% for p in discovered_peers %}
+      <tr>
+        <td>{{ p.machine_name }}</td>
+        <td class="path">{{ p.address }}:{{ p.port }}</td>
+        <td>
+          <form method="post" action="/peers/pair">
+            <input type="hidden" name="peer_id" value="{{ p.peer_id }}">
+            <input type="hidden" name="machine_name" value="{{ p.machine_name }}">
+            <input type="hidden" name="address" value="{{ p.address }}">
+            <input type="hidden" name="port" value="{{ p.port }}">
+            <button>Pair</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="subtle">Nothing found yet. Same-LAN peers show up here automatically; click above to also check your tailnet.</td></tr>
+      {% endfor %}
+    </table>
+
+    <h3>Paired</h3>
+    <table>
+      <tr><th>Machine</th><th>Last synced</th><th colspan="2"></th></tr>
+      {% for p in known_peers if p.paired %}
+      <tr>
+        <td>{{ p.machine_name }}</td>
+        <td>{{ "never" if not p.last_synced_at else p.last_synced_at|int }}</td>
+        <td><form method="post" action="/peers/{{ p.peer_id }}/sync"><button>Sync now</button></form></td>
+        <td>
+          <form method="post" action="/peers/{{ p.peer_id }}/remove" onsubmit="return confirm('Unpair from {{ p.machine_name }}?');">
+            <button class="danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="subtle">No paired peers yet.</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+</details>
+
 {% if dup_groups %}
 <!-- ======================================================= DUPLICATES -->
 <details id="duplicates" open class="section">

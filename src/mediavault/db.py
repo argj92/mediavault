@@ -112,6 +112,47 @@ CREATE TABLE IF NOT EXISTS scans (
     missing_files INTEGER DEFAULT 0,
     placeholders INTEGER DEFAULT 0
 );
+
+-- This machine's own stable identity for LAN pairing -- independent of
+-- hostname/IP (which can change), so a paired peer relationship survives a
+-- DHCP lease change or a rename. Singleton row (id always 1).
+CREATE TABLE IF NOT EXISTS peer_identity (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    peer_id TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+-- A peer this machine has completed mutual pairing with (see peer_api.py
+-- for the handshake). Discovery (who's currently visible on the LAN via
+-- mDNS) is separate, in-memory, ephemeral state -- this table is the
+-- persistent trust relationship, independent of whether the peer is
+-- online right now.
+CREATE TABLE IF NOT EXISTS known_peers (
+    peer_id TEXT PRIMARY KEY,
+    machine_name TEXT NOT NULL,
+    address TEXT,
+    port INTEGER,
+    paired INTEGER NOT NULL DEFAULT 0,
+    outgoing_token TEXT,  -- what WE present when calling THEM
+    incoming_token TEXT,  -- what THEY must present when calling US
+    first_seen REAL NOT NULL,
+    last_seen REAL,
+    paired_at REAL,
+    last_synced_at REAL
+);
+
+-- An incoming pairing request we haven't accepted/rejected yet -- shown in
+-- the UI as "Machine X wants to pair, code: NNNNNN" for the user to confirm
+-- against what's displayed on the initiating machine.
+CREATE TABLE IF NOT EXISTS pending_pairings (
+    peer_id TEXT PRIMARY KEY,
+    machine_name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    outgoing_token TEXT NOT NULL,
+    requested_at REAL NOT NULL
+);
 """
 
 
@@ -258,6 +299,127 @@ def list_remote_catalogs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def remove_remote_catalog(conn: sqlite3.Connection, machine: str) -> None:
     conn.execute("DELETE FROM remote_files WHERE machine=?", (machine,))
     conn.execute("DELETE FROM remote_catalogs WHERE machine=?", (machine,))
+
+
+# ------------------------------------------------------------- LAN pairing
+
+def get_or_create_peer_id(conn: sqlite3.Connection) -> str:
+    """This machine's own stable identity, generated once and kept forever
+    (independent of hostname/IP, which can change)."""
+    row = conn.execute("SELECT peer_id FROM peer_identity WHERE id=1").fetchone()
+    if row:
+        return row["peer_id"]
+    import uuid
+
+    peer_id = uuid.uuid4().hex
+    conn.execute(
+        "INSERT INTO peer_identity (id, peer_id, created_at) VALUES (1, ?, ?)", (peer_id, time.time())
+    )
+    return peer_id
+
+
+def upsert_pairing_peer(
+    conn: sqlite3.Connection, peer_id: str, machine_name: str, address: str, port: int,
+    incoming_token: str | None = None, paired: bool = False,
+) -> None:
+    """Creates the INITIATOR's 'pairing in progress' row. `incoming_token`
+    is the token *we* just generated and sent to the peer in the pair-
+    request -- we already know it (we can require it from them as soon as
+    they call us), even though our own `outgoing_token` (what we present to
+    them) isn't known until their pair-confirm reply arrives."""
+    now = time.time()
+    existing = conn.execute("SELECT * FROM known_peers WHERE peer_id=?", (peer_id,)).fetchone()
+    if existing is None:
+        conn.execute(
+            """INSERT INTO known_peers (peer_id, machine_name, address, port, paired,
+               incoming_token, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (peer_id, machine_name, address, port, int(paired), incoming_token, now, now),
+        )
+    else:
+        conn.execute(
+            """UPDATE known_peers SET machine_name=?, address=?, port=?, incoming_token=?,
+               paired=?, outgoing_token=NULL, last_seen=? WHERE peer_id=?""",
+            (machine_name, address, port, incoming_token, int(paired), now, peer_id),
+        )
+
+
+def finalize_pairing(conn: sqlite3.Connection, peer_id: str, outgoing_token: str) -> None:
+    """Called when the peer we're pairing with confirms and sends back the
+    token *they* generated -- that's what completes pairing on the
+    initiator's side: it's the token we must present when calling *them*."""
+    conn.execute(
+        "UPDATE known_peers SET paired=1, outgoing_token=?, paired_at=? WHERE peer_id=?",
+        (outgoing_token, time.time(), peer_id),
+    )
+
+
+def complete_pairing_as_acceptor(
+    conn: sqlite3.Connection, peer_id: str, machine_name: str, address: str, port: int,
+    outgoing_token: str, incoming_token: str,
+) -> None:
+    """Called on the ACCEPTING side once the user confirms a pending
+    pairing request -- creates the paired known_peers row directly (no
+    separate 'in progress' step needed on this side, since the request
+    already carried everything but our own freshly generated token)."""
+    now = time.time()
+    conn.execute(
+        """INSERT INTO known_peers (peer_id, machine_name, address, port, paired,
+           outgoing_token, incoming_token, first_seen, last_seen, paired_at)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+           ON CONFLICT(peer_id) DO UPDATE SET
+               machine_name=excluded.machine_name, address=excluded.address, port=excluded.port,
+               paired=1, outgoing_token=excluded.outgoing_token, incoming_token=excluded.incoming_token,
+               last_seen=excluded.last_seen, paired_at=excluded.paired_at""",
+        (peer_id, machine_name, address, port, outgoing_token, incoming_token, now, now, now),
+    )
+
+
+def list_known_peers(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM known_peers ORDER BY machine_name").fetchall()
+
+
+def get_known_peer(conn: sqlite3.Connection, peer_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM known_peers WHERE peer_id=?", (peer_id,)).fetchone()
+
+
+def find_peer_by_incoming_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM known_peers WHERE incoming_token=? AND paired=1", (token,)
+    ).fetchone()
+
+
+def remove_known_peer(conn: sqlite3.Connection, peer_id: str) -> None:
+    conn.execute("DELETE FROM known_peers WHERE peer_id=?", (peer_id,))
+
+
+def touch_peer_synced(conn: sqlite3.Connection, peer_id: str) -> None:
+    conn.execute("UPDATE known_peers SET last_synced_at=? WHERE peer_id=?", (time.time(), peer_id))
+
+
+def add_pending_pairing(
+    conn: sqlite3.Connection, peer_id: str, machine_name: str, address: str, port: int,
+    code: str, outgoing_token: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO pending_pairings (peer_id, machine_name, address, port, code, outgoing_token, requested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(peer_id) DO UPDATE SET
+               machine_name=excluded.machine_name, address=excluded.address, port=excluded.port,
+               code=excluded.code, outgoing_token=excluded.outgoing_token, requested_at=excluded.requested_at""",
+        (peer_id, machine_name, address, port, code, outgoing_token, time.time()),
+    )
+
+
+def list_pending_pairings(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM pending_pairings ORDER BY requested_at").fetchall()
+
+
+def get_pending_pairing(conn: sqlite3.Connection, peer_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM pending_pairings WHERE peer_id=?", (peer_id,)).fetchone()
+
+
+def remove_pending_pairing(conn: sqlite3.Connection, peer_id: str) -> None:
+    conn.execute("DELETE FROM pending_pairings WHERE peer_id=?", (peer_id,))
 
 
 def get_worker_state(conn: sqlite3.Connection, key: str, default=None):
