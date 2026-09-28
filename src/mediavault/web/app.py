@@ -164,6 +164,51 @@ def seed_roots_if_empty(conn: sqlite3.Connection, config: AppConfig) -> None:
         db.upsert_root(conn, r.label, str(r.path), r.role, r.mode)
 
 
+# ----------------------------------------------------------------------- api
+
+@app.get("/api/status")
+def api_status(request: Request):
+    """Small JSON summary for external dashboards (e.g. Donna's hub) to poll.
+    Deliberately cheap — skips the library tree walk and iCloud/protection
+    scans the full index() page does — so it's safe to hit on every refresh."""
+    config = get_config(request)
+    with get_conn(request) as conn:
+        roots = db.list_roots(conn)
+        scan_status = {}
+        for r in roots:
+            active = db.get_active_scan(conn, r["label"])
+            scan_status[r["label"]] = {
+                "active": bool(active),
+                "last_finished": None if active else db.get_last_finished_scan(conn, r["label"]),
+            }
+        total_files = sum(1 for _ in db.all_files(conn))
+        total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
+        dup_groups = dedupe.find_duplicates(conn)
+        untracked = suggestions.untracked_media(conn, config.video_extensions)
+        quarantine_items = db.list_quarantine(conn)
+
+    return JSONResponse({
+        "machine": config.machine,
+        "roots": [
+            {
+                "label": r["label"],
+                "role": r["role"],
+                "enabled": bool(r["enabled"]),
+                "scanning": scan_status[r["label"]]["active"],
+                "last_scan": scan_status[r["label"]]["last_finished"],
+            }
+            for r in roots
+        ],
+        "total_files": total_files,
+        "total_bytes": total_bytes,
+        "duplicate_groups": len(dup_groups),
+        "wasted_bytes": dedupe.total_wasted_bytes(dup_groups),
+        "untracked_count": len([u for u in untracked if not u["already_in_library"]]),
+        "quarantine_count": len(quarantine_items),
+        "any_scan_active": any(s["active"] for s in scan_status.values()),
+    })
+
+
 # --------------------------------------------------------------- single page
 
 @app.get("/")

@@ -33,12 +33,12 @@ def _log_dir() -> Path:
     return d
 
 
-def install(bin_path: Path, project_dir: Path, config_path: Path, port: int = 8420) -> str:
+def install(bin_path: Path, project_dir: Path, config_path: Path, port: int = 8420, host: str = "127.0.0.1") -> str:
     system = platform.system()
     if system == "Darwin":
-        return _install_macos(bin_path, project_dir, config_path, port)
+        return _install_macos(bin_path, project_dir, config_path, port, host)
     if system == "Linux":
-        return _install_linux(bin_path, project_dir, config_path, port)
+        return _install_linux(bin_path, project_dir, config_path, port, host)
     raise RuntimeError(
         f"No automatic background-service support for {system} yet. "
         "Run `mediavault web` (or `gui`) manually, or set up a Scheduled Task yourself."
@@ -69,7 +69,7 @@ def status() -> str:
 
 # ------------------------------------------------------------------- macOS
 
-def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: int) -> str:
+def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: int, host: str = "127.0.0.1") -> str:
     logs = _log_dir()
     plist = _plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +84,8 @@ def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: i
         <string>{bin_path}</string>
         <string>web</string>
         <string>--no-open-browser</string>
+        <string>--host</string>
+        <string>{host}</string>
         <string>--port</string>
         <string>{port}</string>
     </array>
@@ -136,7 +138,7 @@ def _uid() -> int:
 
 # ------------------------------------------------------------------ Linux
 
-def _install_linux(bin_path: Path, project_dir: Path, config_path: Path, port: int) -> str:
+def _install_linux(bin_path: Path, project_dir: Path, config_path: Path, port: int, host: str = "127.0.0.1") -> str:
     logs = _log_dir()
     unit = _unit_path()
     unit.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +150,7 @@ Description=MediaVault background scanner/web UI
 Type=simple
 WorkingDirectory={project_dir}
 Environment=MEDIAVAULT_CONFIG={config_path}
-ExecStart={bin_path} web --no-open-browser --port {port}
+ExecStart={bin_path} web --no-open-browser --host {host} --port {port}
 Restart=on-failure
 StandardOutput=append:{logs / "service.log"}
 StandardError=append:{logs / "service.err.log"}
