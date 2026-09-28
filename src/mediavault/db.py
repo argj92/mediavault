@@ -501,6 +501,23 @@ def get_last_finished_scan(conn: sqlite3.Connection, root_label: str) -> sqlite3
     ).fetchone()
 
 
+def get_abandoned_scan(conn: sqlite3.Connection, root_label: str, stale_after_seconds: float = 6 * 3600) -> sqlite3.Row | None:
+    """The inverse of get_active_scan's staleness check: a scan attempt that
+    never finished and is old enough it's not legitimately still running --
+    most likely the process crashed, was force-quit, or the machine slept
+    mid-scan. scan_root commits progress periodically, so whatever it
+    indexed before that point is real, already-committed data; this lets the
+    UI say so ("N file(s) indexed, didn't finish") instead of the misleading
+    "never scanned yet" when real content already exists in the index."""
+    row = conn.execute(
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        (root_label,),
+    ).fetchone()
+    if row is not None and time.time() - row["started_at"] > stale_after_seconds:
+        return row
+    return None
+
+
 def finish_scan(conn: sqlite3.Connection, scan_id: int, stats: dict) -> None:
     conn.execute(
         """UPDATE scans SET finished_at=?, files_scanned=?, new_files=?, updated_files=?,

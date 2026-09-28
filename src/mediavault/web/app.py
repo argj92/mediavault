@@ -174,9 +174,15 @@ def index(request: Request, msg: str | None = None):
         scan_status = {}
         for r in roots:
             active = db.get_active_scan(conn, r["label"])
+            last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
             scan_status[r["label"]] = {
                 "active": active,
-                "last_finished": None if active else db.get_last_finished_scan(conn, r["label"]),
+                "last_finished": last_finished,
+                # A scan that crashed/was killed mid-way still committed real
+                # progress (scan_root commits periodically) -- surface that
+                # instead of falsely claiming "never scanned yet" once both
+                # of the above come back empty.
+                "abandoned": None if (active or last_finished) else db.get_abandoned_scan(conn, r["label"]),
             }
         any_scan_active = any(s["active"] for s in scan_status.values())
         total_files = sum(1 for _ in db.all_files(conn))
