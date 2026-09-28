@@ -28,9 +28,13 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
             from . import scanner
 
             scanner.scan_root(conn, root, hash_algo=config.hash_algo)
-        except FileNotFoundError as exc:
-            # A removable/backup/iCloud drive not being mounted right now is
-            # normal, not an error worth breaking the whole reconcile over.
+        except OSError as exc:
+            # A removable/backup/iCloud/network drive not being mounted right
+            # now (FileNotFoundError) is normal. A network mount that drops
+            # mid-scan (stale SMB/NFS handle, sleep/wake, Wi-Fi hiccup) raises
+            # some other OSError partway through the walk/stat/hash calls --
+            # equally not worth losing the whole reconcile cycle over. Either
+            # way, skip just this root and keep scanning the rest.
             scan_errors.append(str(exc))
             log.warning("skipping scan for %s: %s", root.label, exc)
 
