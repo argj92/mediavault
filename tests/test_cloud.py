@@ -40,3 +40,25 @@ def test_storage_summary(tmp_path):
     assert summary["downloaded_count"] == 1
     assert summary["placeholder_count"] == 1
     assert summary["downloaded_bytes"] == 1000
+
+
+def test_walk_cloud_aware_rel_paths_use_forward_slashes(tmp_path):
+    """rel_path is stored in the DB and parsed into path components elsewhere
+    (e.g. browse.py's folder tree / hidden-folder rules) assuming '/'
+    separators. walk_cloud_aware must use .as_posix(), not str(), when
+    turning a relative_to() result into a string -- str() of a WindowsPath
+    uses backslashes, which would silently break that parsing on Windows.
+    This can't be exercised end-to-end on macOS/Linux (str() and .as_posix()
+    agree on POSIX), so it's pinned directly against the class actually
+    responsible for the platform difference."""
+    from pathlib import PureWindowsPath
+
+    windows_style = PureWindowsPath("Movies", "Action", ".hidden", "Secret.mkv")
+    assert windows_style.as_posix() == "Movies/Action/.hidden/Secret.mkv"
+    assert str(windows_style) == "Movies\\Action\\.hidden\\Secret.mkv"  # what str() would have produced
+
+    (tmp_path / "nested" / "dir").mkdir(parents=True)
+    (tmp_path / "nested" / "dir" / "file.mkv").write_bytes(b"x")
+    entries = {e.rel_path: e for e in cloud.walk_cloud_aware(tmp_path)}
+    assert "nested/dir/file.mkv" in entries
+    assert "\\" not in list(entries)[0]

@@ -44,10 +44,15 @@ def walk_cloud_aware(root: Path):
             full = Path(dirpath) / name
             if is_placeholder(name):
                 real_rel = (Path(dirpath) / real_name_for_placeholder(name)).relative_to(root)
-                yield CloudEntry(rel_path=str(real_rel), downloaded=False, local_size=None)
+                # .as_posix(), not str(): rel_path is stored in the DB and
+                # treated as forward-slash-separated everywhere it's parsed
+                # into components (e.g. browse.py's folder tree / hidden-
+                # folder rules). str() of a WindowsPath uses backslashes,
+                # which silently breaks that parsing on Windows.
+                yield CloudEntry(rel_path=real_rel.as_posix(), downloaded=False, local_size=None)
             else:
                 rel = full.relative_to(root)
-                yield CloudEntry(rel_path=str(rel), downloaded=True, local_size=full.stat().st_size)
+                yield CloudEntry(rel_path=rel.as_posix(), downloaded=True, local_size=full.stat().st_size)
 
 
 def largest_downloaded_files(root: Path, top_n: int = 25) -> list[tuple[str, int]]:
