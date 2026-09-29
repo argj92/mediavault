@@ -177,9 +177,15 @@ def api_status(request: Request):
         scan_status = {}
         for r in roots:
             active = db.get_active_scan(conn, r["label"])
+            last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
             scan_status[r["label"]] = {
                 "active": bool(active),
-                "last_finished": None if active else db.get_last_finished_scan(conn, r["label"]),
+                # sqlite3.Row isn't JSON-serializable -- project down to the
+                # fields a dashboard actually needs.
+                "last_finished": None if last_finished is None else {
+                    "finished_at": last_finished["finished_at"],
+                    "files_scanned": last_finished["files_scanned"],
+                },
             }
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
