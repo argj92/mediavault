@@ -432,7 +432,10 @@ def gui_entry() -> None:
 # ------------------------------------------------------------------- service
 
 @service_app.command("install")
-def service_install(port: int = 8420):
+def service_install(
+    port: int = 8420,
+    host: str = typer.Option("127.0.0.1", help="bind address — e.g. a Tailscale IP to reach the UI from other devices"),
+):
     """Install mediavault as an always-on background service (launchd on
     macOS, systemd --user on Linux) so scanning/duplicate/sync-status
     notifications keep happening even with no UI open, and it survives
@@ -444,7 +447,7 @@ def service_install(port: int = 8420):
     if not bin_path.exists():
         console.print(f"[red]Could not find the mediavault executable next to {sys.executable}[/red]")
         raise typer.Exit(1)
-    msg = service.install(bin_path.resolve(), Path.cwd(), config.config_path.resolve(), port=port)
+    msg = service.install(bin_path.resolve(), Path.cwd(), config.config_path.resolve(), port=port, host=host)
     console.print(f"[green]{msg}[/green]")
 
 
