@@ -26,6 +26,13 @@ video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts"]
 # once at startup so the local index is fresh before you look at anything.
 scan_interval_minutes: 15
 
+# Desktop notifications (new duplicates, a root drifting out of sync, new
+# untracked media) fire from the background worker above -- set to false to
+# go quiet. Set false, then true again later, and you'll only be notified
+# about changes from that point on, not a backlog of everything that
+# happened while notifications were off.
+notifications_enabled: true
+
 # Opt-in: lets this machine find and pair with other mediavault instances on
 # your network (same LAN via mDNS, or anywhere on your Tailscale tailnet) so
 # Protection's cross-machine catalog exchange can happen automatically

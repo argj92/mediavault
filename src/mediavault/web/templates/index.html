@@ -80,6 +80,8 @@
           <span class="pill warn">scanning… {{ status.active.files_scanned }} file(s) so far</span>
           {% elif status.last_finished %}
           <span class="subtle">last scanned {{ status.last_finished.finished_at|time_ago }} — {{ status.last_finished.files_scanned }} file(s)</span>
+          {% elif status.abandoned %}
+          <span class="subtle" title="Started {{ status.abandoned.started_at|time_ago }} and never finished — the process may have crashed, been force-quit, or slept mid-scan.">{{ status.abandoned.files_scanned }} file(s) indexed, didn't finish — click Scan now to retry</span>
           {% else %}
           <span class="subtle">never scanned yet</span>
           {% endif %}

@@ -104,3 +104,37 @@ def test_background_worker_start_does_not_block_on_first_cycle(tmp_path, monkeyp
 
     release_cycle.set()
     worker.stop()
+
+
+def test_notify_on_changes_respects_notifications_enabled_flag(conn, tmp_path, monkeypatch):
+    from mediavault import db, notify
+
+    calls = []
+    monkeypatch.setattr(notify, "notify", lambda title, message: calls.append(title))
+
+    summary = {
+        "duplicate_groups": 3,
+        "wasted_bytes": 123,
+        "sync_status": [],
+        "untracked_count": 0,
+    }
+    quiet_config = AppConfig(
+        machine="test-machine", db_path=tmp_path / "mediavault.db", hash_algo="sha256",
+        tmdb_api_key_env="TMDB_API_KEY", video_extensions=[".mkv"], scan_interval_minutes=15,
+        notifications_enabled=False,
+    )
+
+    scheduler.notify_on_changes(conn, summary, quiet_config)
+    assert calls == []
+    # The baseline still advances even while quiet, so turning notifications
+    # back on later doesn't dump a backlog of already-seen changes.
+    assert db.get_worker_state(conn, "last_notified_duplicate_groups", 0) == 3
+
+    # A later, genuinely new change still notifies once re-enabled.
+    loud_config = AppConfig(
+        machine="test-machine", db_path=tmp_path / "mediavault.db", hash_algo="sha256",
+        tmdb_api_key_env="TMDB_API_KEY", video_extensions=[".mkv"], scan_interval_minutes=15,
+        notifications_enabled=True,
+    )
+    scheduler.notify_on_changes(conn, {**summary, "duplicate_groups": 5}, loud_config)
+    assert calls == ["MediaVault — new duplicates found"]

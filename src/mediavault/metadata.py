@@ -114,6 +114,29 @@ def lookup_tmdb(title: str, year: int | None, media_type: str, api_key: str) -> 
     }
 
 
+def files_needing_guess(conn: sqlite3.Connection, video_extensions: list[str], limit: int = 100) -> list[sqlite3.Row]:
+    """Tracked files with no title/year guess yet, for the Metadata section.
+    Scanning indexes every file, not just video ones (duplicates/protection
+    rely on that) -- but a title/year guess is only meaningful for a video
+    file. Without this filter, macOS junk that rides along on any non-
+    APFS/exFAT/SMB copy (.DS_Store, AppleDouble "._*" sidecar files) and
+    other non-video files drown out the real candidates. A dot-prefixed
+    basename is excluded outright, not just filtered by extension -- an
+    AppleDouble sidecar file for "Movie.mkv" is itself named "._Movie.mkv",
+    which still *ends* in ".mkv" and would otherwise slip through. Filtered
+    in SQL, not after fetching, so `limit` caps actual candidates rather
+    than being exhausted by junk before it's even inspected."""
+    ext_clause = " OR ".join(["rel_path LIKE ?"] * len(video_extensions))
+    ext_params = [f"%{ext}" for ext in video_extensions]
+    return conn.execute(
+        "SELECT * FROM files WHERE missing=0 AND is_placeholder=0 AND title_guess IS NULL "
+        "AND root_label IN (SELECT label FROM roots WHERE role != 'inbox') "
+        "AND rel_path NOT LIKE '.%' AND rel_path NOT LIKE '%/.%' "
+        f"AND ({ext_clause}) LIMIT ?",
+        (*ext_params, limit),
+    ).fetchall()
+
+
 def enrich_file(conn: sqlite3.Connection, file_row: sqlite3.Row, api_key: str | None) -> dict:
     """Guess title/year from the filename, optionally confirm via TMDB
     (cached), store the result against the file row, and return it."""

@@ -1,4 +1,4 @@
-from mediavault import metadata
+from mediavault import db, metadata
 
 
 def test_guess_movie_release_name():
@@ -43,3 +43,32 @@ def test_enrich_file_without_tmdb_key_uses_filename_guess(conn):
     assert result["title"] == "Inception"
     assert result["year"] == 2010
     assert result["from_tmdb"] is False
+
+
+def test_files_needing_guess_excludes_non_video_junk(conn):
+    """Scanning indexes every file (macOS .DS_Store / AppleDouble "._*"
+    sidecar files included) -- the Metadata section should only ever offer
+    a title/year guess for something that's actually a video file."""
+    db.upsert_root(conn, "primary", "/tmp/primary", "primary", "mirror")
+    video_extensions = [".mkv", ".mp4"]
+
+    db.upsert_file(conn, "primary", "Movie.mkv", 100, 1.0, "sha256:a", False)
+    db.upsert_file(conn, "primary", ".DS_Store", 10, 1.0, "sha256:b", False)
+    db.upsert_file(conn, "primary", "._Movie.mkv", 10, 1.0, "sha256:c", False)
+    db.upsert_file(conn, "primary", "Notes.txt", 10, 1.0, "sha256:d", False)
+    db.upsert_file(conn, "primary", "Show.mp4", 100, 1.0, "sha256:e", False)
+
+    results = metadata.files_needing_guess(conn, video_extensions)
+
+    assert {r["rel_path"] for r in results} == {"Movie.mkv", "Show.mp4"}
+
+
+def test_files_needing_guess_skips_files_already_guessed(conn):
+    db.upsert_root(conn, "primary", "/tmp/primary", "primary", "mirror")
+    db.upsert_file(conn, "primary", "Movie.mkv", 100, 1.0, "sha256:a", False)
+    row = db.get_file(conn, "primary", "Movie.mkv")
+    db.update_file_guess(conn, row["id"], title="Movie", year=2020, media_type="movie")
+
+    results = metadata.files_needing_guess(conn, [".mkv"])
+
+    assert results == []

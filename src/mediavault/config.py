@@ -52,6 +52,7 @@ class AppConfig:
     tmdb_api_key_env: str
     video_extensions: list[str]
     scan_interval_minutes: int
+    notifications_enabled: bool = True
     enable_lan_discovery: bool = False
     peer_port: int = 8421
     seed_roots: list[RootConfig] = field(default_factory=list)
@@ -107,6 +108,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         tmdb_api_key_env=raw.get("tmdb_api_key_env", "TMDB_API_KEY"),
         video_extensions=raw.get("video_extensions", DEFAULT_VIDEO_EXTENSIONS),
         scan_interval_minutes=int(raw.get("scan_interval_minutes", 15)),
+        notifications_enabled=bool(raw.get("notifications_enabled", True)),
         enable_lan_discovery=bool(raw.get("enable_lan_discovery", False)),
         peer_port=int(raw.get("peer_port", 8421)),
         seed_roots=seed_roots,
