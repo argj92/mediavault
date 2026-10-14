@@ -389,23 +389,31 @@ def trash_empty(
 
 @app.command()
 def web(
-    host: str = "127.0.0.1",
+    host: list[str] = typer.Option(
+        ["127.0.0.1"], "--host",
+        help="address to listen on; repeat to listen on several, e.g. `--host 127.0.0.1 --host tailscale` "
+             "('tailscale' = this machine's Tailscale IP)",
+    ),
     port: int = 8420,
     open_browser: bool = typer.Option(True, help="open the dashboard in your default browser"),
 ):
-    """Run the local web UI (also usable from another device on your LAN)."""
+    """Run the local web UI (also reachable from other devices if you give it another --host)."""
     import threading
-    import uvicorn
 
     from .web.app import app as fastapi_app, configure
+    from .web.serve import serve
 
     config = _load()
     configure(config)
 
     if open_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+        threading.Timer(1.0, lambda: webbrowser.open(f"http://{host[0]}:{port}")).start()
 
-    uvicorn.run(fastapi_app, host=host, port=port, log_level="info")
+    try:
+        serve(fastapi_app, host, port)
+    except OSError as exc:
+        console.print(f"[red]Could not start the web UI: {exc}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -434,7 +442,11 @@ def gui_entry() -> None:
 @service_app.command("install")
 def service_install(
     port: int = 8420,
-    host: str = typer.Option("127.0.0.1", help="bind address — e.g. a Tailscale IP to reach the UI from other devices"),
+    host: list[str] = typer.Option(
+        ["127.0.0.1"], "--host",
+        help="address(es) to listen on; repeat for several, e.g. `--host 127.0.0.1 --host tailscale` "
+             "to serve both this machine and your tailnet",
+    ),
 ):
     """Install mediavault as an always-on background service (launchd on
     macOS, systemd --user on Linux) so scanning/duplicate/sync-status
@@ -447,7 +459,7 @@ def service_install(
     if not bin_path.exists():
         console.print(f"[red]Could not find the mediavault executable next to {sys.executable}[/red]")
         raise typer.Exit(1)
-    msg = service.install(bin_path.resolve(), Path.cwd(), config.config_path.resolve(), port=port, host=host)
+    msg = service.install(bin_path.resolve(), Path.cwd(), config.config_path.resolve(), port=port, hosts=host)
     console.print(f"[green]{msg}[/green]")
 
 
