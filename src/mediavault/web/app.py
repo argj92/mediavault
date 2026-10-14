@@ -170,7 +170,13 @@ def seed_roots_if_empty(conn: sqlite3.Connection, config: AppConfig) -> None:
 def api_status(request: Request):
     """Small JSON summary for external dashboards (e.g. Donna's hub) to poll.
     Deliberately cheap — skips the library tree walk and iCloud/protection
-    scans the full index() page does — so it's safe to hit on every refresh."""
+    scans the full index() page does — so it's safe to hit on every refresh.
+
+    This is a contract with out-of-repo consumers, so keep field *types*
+    stable: per root, `last_scan` is the unix timestamp (float) of the last
+    finished scan or null -- consumers do arithmetic on it directly. New
+    detail goes in new sibling keys (`last_scan_files`), never by changing
+    what an existing key holds."""
     config = get_config(request)
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
@@ -180,12 +186,8 @@ def api_status(request: Request):
             last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
             scan_status[r["label"]] = {
                 "active": bool(active),
-                # sqlite3.Row isn't JSON-serializable -- project down to the
-                # fields a dashboard actually needs.
-                "last_finished": None if last_finished is None else {
-                    "finished_at": last_finished["finished_at"],
-                    "files_scanned": last_finished["files_scanned"],
-                },
+                "last_scan": None if last_finished is None else last_finished["finished_at"],
+                "last_scan_files": None if last_finished is None else last_finished["files_scanned"],
             }
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
@@ -201,7 +203,8 @@ def api_status(request: Request):
                 "role": r["role"],
                 "enabled": bool(r["enabled"]),
                 "scanning": scan_status[r["label"]]["active"],
-                "last_scan": scan_status[r["label"]]["last_finished"],
+                "last_scan": scan_status[r["label"]]["last_scan"],
+                "last_scan_files": scan_status[r["label"]]["last_scan_files"],
             }
             for r in roots
         ],
