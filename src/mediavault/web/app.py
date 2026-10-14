@@ -4,7 +4,9 @@ ways to launch it.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import mimetypes
 import platform
 import shutil
@@ -22,60 +24,10 @@ from fastapi.templating import Jinja2Templates
 
 from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
+from ..lan import LanDiscovery
 
 BASE_DIR = Path(__file__).parent
-
-
-def _start_lan_discovery(app: FastAPI, config: AppConfig) -> dict:
-    """Opt-in (config.enable_lan_discovery): starts the separate, narrow
-    peer_api server bound to all interfaces (not just 127.0.0.1 — this is
-    the one deliberate exception, see peer_api.py's own docstring for why
-    it's safe), plus mDNS advertise/browse so other mediavault instances on
-    the LAN show up automatically. Returns the pieces so lifespan can clean
-    them up on shutdown.
-
-    zeroconf's own synchronous calls (register_service/ServiceBrowser) must
-    run on a thread that ISN'T already running an asyncio event loop --
-    calling them directly from this coroutine (uvicorn's own loop thread)
-    raises zeroconf._exceptions.EventLoopBlocked. Found by actually starting
-    the app with this enabled, not by reasoning about it -- so the whole
-    zeroconf setup happens in its own plain thread instead."""
-    import threading
-
-    import uvicorn
-
-    from .. import peer_api
-
-    with db.connect(config.db_path) as conn:
-        own_peer_id = db.get_or_create_peer_id(conn)
-
-    peer_api.app.state.config = config
-    uvicorn_config = uvicorn.Config(peer_api.app, host="0.0.0.0", port=config.peer_port, log_level="warning")
-    peer_server = uvicorn.Server(uvicorn_config)
-    peer_thread = threading.Thread(target=peer_server.run, daemon=True)
-    peer_thread.start()
-
-    state: dict = {"peer_server": peer_server, "zc": None, "advertiser": None, "browser": None}
-
-    def _setup_zeroconf() -> None:
-        from zeroconf import Zeroconf
-
-        from ..discovery import Advertiser, Browser
-
-        zc = Zeroconf()
-        advertiser = Advertiser(zc, config.machine, own_peer_id, config.peer_port)
-        advertiser.start()
-        browser = Browser(zc, own_peer_id)
-        browser.start()
-        state["zc"], state["advertiser"], state["browser"] = zc, advertiser, browser
-        app.state.browser = browser
-
-    zc_thread = threading.Thread(target=_setup_zeroconf, daemon=True)
-    zc_thread.start()
-    zc_thread.join(timeout=10)  # so app.state.browser is set before we return, for the common case
-
-    app.state.own_peer_id = own_peer_id
-    return state
+log = logging.getLogger("mediavault.web")
 
 
 @asynccontextmanager
@@ -88,19 +40,21 @@ async def lifespan(app: FastAPI):
     worker.start()  # kicks off the first scan in the background; doesn't block startup
     app.state.worker = worker
 
-    lan = _start_lan_discovery(app, config) if config.enable_lan_discovery else None
+    lan = None
+    if config.enable_lan_discovery:
+        lan = LanDiscovery(config)
+        try:
+            await asyncio.to_thread(lan.start)  # blocking socket/mDNS work, off the event loop
+        except Exception:  # noqa: BLE001 - the local UI must come up even if the LAN side can't
+            log.exception("LAN discovery failed to start; continuing without it")
+        app.state.own_peer_id = lan.own_peer_id
+        app.state.browser = lan.browser
 
     yield
 
     worker.stop()
-    if lan:
-        if lan["advertiser"]:
-            lan["advertiser"].stop()
-        if lan["browser"]:
-            lan["browser"].stop()
-        if lan["zc"]:
-            lan["zc"].close()
-        lan["peer_server"].should_exit = True
+    if lan is not None:
+        await asyncio.to_thread(lan.stop)
 
 
 app = FastAPI(title="MediaVault", lifespan=lifespan)
@@ -756,6 +710,10 @@ def peers_discover_tailscale(request: Request):
     from .. import tailscale
 
     config = get_config(request)
+    try:
+        peers.require_lan_enabled(config)
+    except peers.PairingError as exc:
+        return flash_redirect("#peers", str(exc))
     if not tailscale.is_available():
         return flash_redirect("#peers", "Tailscale isn't installed on this machine.")
     found = tailscale.discover_tailnet_candidates(config.peer_port)

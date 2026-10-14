@@ -16,11 +16,25 @@ import socket
 import threading
 from dataclasses import dataclass
 
-from zeroconf import ServiceInfo, ServiceStateChange, Zeroconf
-from zeroconf import ServiceBrowser as _ServiceBrowser
+try:  # optional (`pip install 'mediavault[lan]'`): without it everything but mDNS still works
+    from zeroconf import ServiceInfo, ServiceStateChange, Zeroconf
+    from zeroconf import ServiceBrowser as _ServiceBrowser
+except ImportError:  # pragma: no cover - exercised by test_lan.py via monkeypatch
+    ServiceInfo = ServiceStateChange = Zeroconf = _ServiceBrowser = None  # type: ignore[assignment,misc]
 
 SERVICE_TYPE = "_mediavault._tcp.local."
 log = logging.getLogger("mediavault.discovery")
+
+
+class ZeroconfMissing(RuntimeError):
+    pass
+
+
+def require_zeroconf() -> None:
+    if Zeroconf is None:
+        raise ZeroconfMissing(
+            "LAN discovery needs the optional 'zeroconf' package: pip install 'mediavault[lan]'"
+        )
 
 
 @dataclass

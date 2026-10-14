@@ -43,7 +43,7 @@ def test_pairing_token_directions_cross_match(conn):
     db.remove_pending_pairing(conn_b, peer_id_a)
 
     # B "calls back" A's pair-confirm with token_b -- A finalizes.
-    db.finalize_pairing(conn_a, peer_id_b, outgoing_token=token_b)
+    assert db.finalize_pairing(conn_a, peer_id_b, outgoing_token=token_b)
 
     a_view_of_b = dict(db.get_known_peer(conn_a, peer_id_b))
     b_view_of_a = dict(db.get_known_peer(conn_b, peer_id_a))
@@ -79,3 +79,18 @@ def test_pending_pairing_upsert_refreshes_not_duplicates(conn):
     rows = db.list_pending_pairings(conn)
     assert len(rows) == 1
     assert rows[0]["code"] == "222222"
+
+
+def test_finalize_pairing_only_wins_once(conn):
+    db.upsert_pairing_peer(conn, "peer-f", "machine-f", "10.0.0.8", 8421, incoming_token="in", paired=False)
+    assert db.finalize_pairing(conn, "peer-f", "first") is True
+    assert db.finalize_pairing(conn, "peer-f", "second") is False   # already paired: no overwrite
+    assert db.finalize_pairing(conn, "never-seen", "x") is False
+    assert db.get_known_peer(conn, "peer-f")["outgoing_token"] == "first"
+
+
+def test_token_lookup_matches_exactly(conn):
+    db.complete_pairing_as_acceptor(conn, "peer-t", "machine-t", "10.0.0.9", 8421, outgoing_token="o", incoming_token="secret-token")
+    assert db.find_peer_by_incoming_token(conn, "secret-token")["peer_id"] == "peer-t"
+    for near_miss in ("secret-toke", "secret-tokeN", "secret-token ", "", "o"):
+        assert db.find_peer_by_incoming_token(conn, near_miss) is None
