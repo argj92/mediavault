@@ -14,6 +14,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import junk
+
 PLACEHOLDER_SUFFIX = ".icloud"
 
 
@@ -39,8 +41,14 @@ def walk_cloud_aware(root: Path):
     the real relative path they stand in for, without ever opening/reading
     them (which would trigger a download)."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames.sort()
+        # Prune in place so os.walk never descends into OS-generated folders
+        # (Spotlight/fseventsd indexes, ...); and skip OS junk files
+        # (.DS_Store, AppleDouble "._*") entirely -- see junk.py for why they
+        # must never reach the index.
+        dirnames[:] = sorted(d for d in dirnames if not junk.is_junk_dirname(d))
         for name in sorted(filenames):
+            if junk.is_junk_name(name):
+                continue
             full = Path(dirpath) / name
             if is_placeholder(name):
                 real_rel = (Path(dirpath) / real_name_for_placeholder(name)).relative_to(root)
