@@ -60,18 +60,53 @@ def total_wasted_bytes(groups: list[dict]) -> int:
     return sum(g["wasted_bytes"] for g in groups)
 
 
+class QuarantineError(Exception):
+    """A quarantine that couldn't (fully) happen for a reason worth telling
+    the user in plain words -- an unmounted drive, a file that's already
+    gone, a copy that died partway -- as opposed to a bug."""
+
+
 def quarantine_duplicate(conn: sqlite3.Connection, quarantine_dir: Path, root_path: Path, root_label: str, rel_path: str) -> Path:
     """Moves one duplicate copy out of its root into quarantine and drops it
-    from the index (it's intentionally gone from that root now)."""
+    from the index (it's intentionally gone from that root now).
+
+    Raises QuarantineError, with nothing changed on disk or in the index,
+    unless noted: a file that's already gone from a *reachable* root has its
+    stale index row dropped (so the dashboard stops listing it) before the
+    error is raised -- callers must let that one commit."""
+    if not root_path.exists():
+        raise QuarantineError(
+            f"'{root_label}' isn't reachable right now (drive or network share not mounted?). "
+            "Reconnect it and try again -- nothing was changed."
+        )
+
     src = root_path / rel_path
-    size = src.stat().st_size if src.exists() else None
+    if not src.exists():
+        db.delete_file_row(conn, root_label, rel_path)
+        raise QuarantineError(
+            f"'{rel_path}' is already gone from {root_label}; removed the stale entry from the index."
+        )
+    size = src.stat().st_size
 
     dest = quarantine_dir / root_label / rel_path
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         dest = dest.with_name(f"{dest.stem}.{int(time.time())}{dest.suffix}")
 
-    shutil.move(str(src), str(dest))
+    try:
+        shutil.move(str(src), str(dest))
+    except OSError as exc:
+        # Across filesystems (the usual case: network share -> local disk) a
+        # move is copy-then-delete. If the copy dies partway -- share drops,
+        # disk full -- a truncated file is left in quarantine while the
+        # original is untouched. Don't leave the truncated one behind to be
+        # mistaken for a real, restorable copy.
+        if src.exists():
+            dest.unlink(missing_ok=True)
+        raise QuarantineError(
+            f"Couldn't move '{rel_path}' out of {root_label}: {exc.strerror or exc}. Nothing was changed."
+        ) from exc
+
     db.add_quarantine_record(conn, root_label, rel_path, str(dest), size, reason="duplicate")
     db.delete_file_row(conn, root_label, rel_path)
     return dest
