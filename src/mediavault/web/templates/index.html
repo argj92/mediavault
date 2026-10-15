@@ -1,12 +1,27 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} — MediaVault{% endblock %}
-{% block head %}{% if any_scan_active %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block content %}
-<h1>{{ machine }}</h1>
-<p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
-{% if any_scan_active %}
-<p class="subtle">A scan is in progress — this page refreshes itself every 5s while that's true.</p>
-{% endif %}
+<header class="page-head">
+  <h1>{{ machine }}</h1>
+  <p class="subtle">Rescans every {{ scan_interval }} min in the background. Index and config for this machine only — nothing here is shared via git.</p>
+</header>
+
+<div class="statusbar" id="statusbar" aria-label="Status">
+  {% for r in roots %}
+  <a class="chip {{ root_states[r.label].state }}" href="/#roots" data-root-chip="{{ r.label }}">
+    <span class="dot"></span><b>{{ r.label }}</b><span class="chip-text">{{ root_states[r.label].short }}</span>
+  </a>
+  {% endfor %}
+  {% for key, (one, many, anchor) in attention.items() %}
+  <a class="chip attn" href="/#{{ anchor }}" data-attn-chip="{{ key }}"{% if not attn_counts.get(key) %} hidden{% endif %}>
+    <b>{{ attn_counts.get(key, 0) }}</b><span class="chip-text">{{ one if attn_counts.get(key) == 1 else many }}</span>
+  </a>
+  {% endfor %}
+</div>
+<div class="update-banner" id="update-banner" hidden>
+  The library changed in the background.
+  <button type="button" onclick="location.reload()">Reload to see it</button>
+</div>
 
 <!-- ========================================================== LIBRARY -->
 <details id="library" class="section">
@@ -51,54 +66,45 @@
   <div class="section-body">
     <p class="subtle">A root is any folder this machine tracks. Exactly one root should be <b>primary</b> — the single basis every other root syncs against. Mark a folder <b>subset</b> (like an iCloud folder that only holds part of your library) so it's never treated as a deletion source, or <b>mirror</b> for a full backup copy.</p>
 
-    <table>
-      <tr><th>Label</th><th>Role / Mode</th><th>Path</th><th>Enabled</th><th>Scan status</th><th colspan="3">Actions</th></tr>
+    <div class="root-cards">
       {% for r in roots %}
-      {% set status = scan_status[r.label] %}
-      <tr>
-        <td>{{ r.label }}{% if r.role == 'primary' %} <span class="pill ok">basis</span>{% endif %}</td>
-        <td>
+      {% set st = root_states[r.label] %}
+      <article class="root-card {{ st.state }}" data-root="{{ r.label }}">
+        <header>
+          <span class="dot"></span>
+          <h3>{{ r.label }}</h3>
+          {% if r.role == 'primary' %}<span class="pill ok">basis</span>{% endif %}
+          <span class="root-text js-root-text" title="{{ st.detail }}">{{ st.text }}</span>
+        </header>
+        <div class="path">{{ r.path }}</div>
+        <div class="root-controls">
           <form method="post" action="/roots/{{ r.label }}/update" class="inline-edit">
-            <select name="role">
-              <option value="primary" {{ "selected" if r.role == "primary" else "" }}>primary</option>
-              <option value="backup" {{ "selected" if r.role == "backup" else "" }}>backup</option>
-              <option value="icloud" {{ "selected" if r.role == "icloud" else "" }}>icloud</option>
-              <option value="inbox" {{ "selected" if r.role == "inbox" else "" }}>inbox</option>
-            </select>
-            <select name="mode">
-              <option value="mirror" {{ "selected" if r.mode == "mirror" else "" }}>mirror</option>
-              <option value="subset" {{ "selected" if r.mode == "subset" else "" }}>subset</option>
-              <option value="watch" {{ "selected" if r.mode == "watch" else "" }}>watch</option>
-            </select>
+            <label>Role
+              <select name="role">
+                {% for v in ['primary', 'backup', 'icloud', 'inbox'] %}<option value="{{ v }}" {{ "selected" if r.role == v else "" }}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Mode
+              <select name="mode">
+                {% for v in ['mirror', 'subset', 'watch'] %}<option value="{{ v }}" {{ "selected" if r.mode == v else "" }}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
             <button>Save</button>
           </form>
-        </td>
-        <td class="path">{{ r.path }}</td>
-        <td>{{ "yes" if r.enabled else "no" }}</td>
-        <td>
-          {% if status.active %}
-          <span class="pill warn">scanning… {{ status.active.files_scanned }} file(s) so far</span>
-          {% elif status.last_finished %}
-          <span class="subtle">last scanned {{ status.last_finished.finished_at|time_ago }} — {{ status.last_finished.files_scanned }} file(s)</span>
-          {% elif status.abandoned %}
-          <span class="subtle" title="{% if status.abandoned.error %}Stopped {{ status.abandoned.started_at|time_ago }}: {{ status.abandoned.error }}{% else %}Started {{ status.abandoned.started_at|time_ago }} and never finished — the process may have crashed, been force-quit, or slept mid-scan.{% endif %}">{{ status.abandoned.files_scanned }} file(s) indexed, didn't finish — click Scan now to retry</span>
-          {% else %}
-          <span class="subtle">never scanned yet</span>
-          {% endif %}
-        </td>
-        <td><form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form></td>
-        <td><form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form></td>
-        <td>
-          <form method="post" action="/roots/{{ r.label }}/delete" onsubmit="return confirm('Remove {{ r.label }} from tracking? Files on disk are not touched.');">
-            <input type="hidden" name="confirm" value="yes">
-            <button class="danger">Remove</button>
-          </form>
-        </td>
-      </tr>
+          <div class="root-actions">
+            <form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form>
+            <form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form>
+            <form method="post" action="/roots/{{ r.label }}/delete" onsubmit="return confirm('Remove {{ r.label }} from tracking? Files on disk are not touched.');">
+              <input type="hidden" name="confirm" value="yes">
+              <button class="danger">Remove</button>
+            </form>
+          </div>
+        </div>
+      </article>
       {% else %}
-      <tr><td colspan="8" class="subtle">No roots yet — add one below.</td></tr>
+      <p class="subtle">No roots yet — add one below.</p>
       {% endfor %}
-    </table>
+    </div>
 
     <h3>Add a root</h3>
     <form method="post" action="/roots/add" class="form-grid">
