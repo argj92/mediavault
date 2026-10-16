@@ -5,6 +5,7 @@ ways to launch it.
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import platform
 import shutil
@@ -24,6 +25,7 @@ from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, 
 from ..config import AppConfig, RootConfig
 
 BASE_DIR = Path(__file__).parent
+log = logging.getLogger("mediavault.web")
 
 
 def _start_lan_discovery(app: FastAPI, config: AppConfig) -> dict:
@@ -148,6 +150,33 @@ def flash_redirect(anchor: str, message: str) -> RedirectResponse:
     """Redirects back to the single page, scrolled to `anchor` (e.g. '#roots'),
     with a flash message."""
     return RedirectResponse(url=f"/?msg={urllib.parse.quote(message)}{anchor}", status_code=303)
+
+
+_SECTION_ANCHORS = {
+    "duplicates": "#duplicates", "sync": "#sync", "promote": "#promote", "roots": "#roots",
+    "recycle-bin": "#recycle-bin", "metadata": "#metadata", "catalog": "#protection", "peers": "#peers",
+}
+
+
+@app.exception_handler(OSError)
+async def drive_error_handler(request: Request, exc: OSError):
+    """Safety net for every route that touches a drive. The drives here are
+    external/network volumes that routinely go away (unmounted share, sleeping
+    NAS, unplugged USB), and an OSError (FileNotFoundError, PermissionError,
+    ConnectionError, ...) escaping a handler used to surface as a bare
+    "Internal Server Error" page with nothing changed and no hint why. Turn
+    it into a message on the dashboard instead; the traceback still goes to
+    the log. Routes with a specific, better message handle their own errors
+    first (see duplicates_quarantine)."""
+    log.error("drive error handling %s %s", request.method, request.url.path, exc_info=exc)
+    message = (
+        "A file operation failed -- a drive or network share may be unmounted or unreachable. "
+        f"Nothing further was changed. ({type(exc).__name__}: {exc.strerror or exc})"
+    )
+    if request.method == "GET":
+        return templates.TemplateResponse(request, "error.html", {"message": message}, status_code=503)
+    section = _SECTION_ANCHORS.get(request.url.path.strip("/").split("/")[0], "")
+    return flash_redirect(section, message)
 
 
 def configure(config: AppConfig) -> FastAPI:
@@ -594,7 +623,14 @@ def duplicates_quarantine(request: Request, root_label: str = Form(...), rel_pat
         root_row = db.get_root(conn, root_label)
         if not root_row:
             return flash_redirect("#duplicates", "No such root.")
-        dedupe.quarantine_duplicate(conn, quarantine_dir, Path(root_row["path"]), root_label, rel_path)
+        try:
+            dedupe.quarantine_duplicate(conn, quarantine_dir, Path(root_row["path"]), root_label, rel_path)
+        except dedupe.QuarantineError as exc:
+            # Caught *inside* the `with` on purpose: for "already gone" the
+            # function drops the stale index row, and that has to commit so
+            # the dashboard stops listing a file that no longer exists. Every
+            # other QuarantineError changes nothing, so committing is a no-op.
+            return flash_redirect("#duplicates", str(exc))
     return flash_redirect("#duplicates", f"Moved '{rel_path}' to quarantine.")
 
 
