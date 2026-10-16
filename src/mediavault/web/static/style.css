@@ -211,3 +211,35 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .video-player:empty { display: none; }
 .video-player { margin: 0.4rem 0 0.8rem; }
 .video-player video { display: block; }
+
+/* ------------------------------------------------------------ duplicates */
+.dup-hist { display: grid; gap: 0.2rem; margin: 0.6rem 0 1rem; }
+.dup-hist-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.2rem; }
+.dup-bar {
+  display: grid; grid-template-columns: 8.5rem 1fr 3rem; align-items: center; gap: 0.7rem;
+  width: 100%; padding: 0.2rem 0.5rem; text-align: left; font-weight: 500;
+  background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text);
+}
+.dup-bar:hover:not(:disabled) { background: var(--panel-alt); border-color: var(--border-bright); box-shadow: none; }
+.dup-bar[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--accent); color: var(--bright); }
+.dup-bar.empty { opacity: 0.35; cursor: default; }
+.dup-bar-label { font-size: 0.8rem; white-space: nowrap; }
+.dup-bar-track { height: 0.7rem; background: var(--panel-alt); border-radius: 4px; overflow: hidden; }
+.dup-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.dup-bar[aria-pressed="true"] .dup-bar-fill { background: var(--accent-bright); }
+.dup-bar-count { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+.linklike { background: none; border: none; padding: 0; color: var(--accent-bright); font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
+.linklike:hover { box-shadow: none; }
+
+.dup-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem; }
+.dup-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+
+.dup-group { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 0.5rem; }
+.dup-group[hidden] { display: none; }
+.dup-group > summary { cursor: pointer; padding: 0.6rem 1rem; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; align-items: baseline; list-style: none; }
+.dup-group > summary::-webkit-details-marker { display: none; }
+.dup-group > summary::before { content: "▸"; color: var(--accent-bright); }
+.dup-group[open] > summary::before { content: "▾"; }
+.dup-name { color: var(--bright); font-weight: 600; overflow-wrap: anywhere; }
+.dup-body { padding: 0 1rem 0.9rem; }
+.dup-group-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; }

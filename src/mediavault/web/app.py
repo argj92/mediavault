@@ -335,6 +335,7 @@ def index(request: Request, msg: str | None = None):
             "total_bytes": total_bytes,
             "dup_groups": dup_groups,
             "wasted_bytes": dedupe.total_wasted_bytes(dup_groups),
+            "dup_histogram": dedupe.size_histogram(dup_groups),
             "sync_statuses": sync_statuses,
             "untracked_items": untracked,
             "untracked_count": len(new_untracked),
@@ -632,6 +633,36 @@ def duplicates_quarantine(request: Request, root_label: str = Form(...), rel_pat
             # other QuarantineError changes nothing, so committing is a no-op.
             return flash_redirect("#duplicates", str(exc))
     return flash_redirect("#duplicates", f"Moved '{rel_path}' to quarantine.")
+
+
+@app.post("/duplicates/quarantine-bulk")
+def duplicates_quarantine_bulk(
+    request: Request,
+    hashes: list[str] = Form(...),
+    mode: str = Form(...),
+    confirm: str = Form(...),
+):
+    """Quarantine many duplicate groups at once -- the groups currently shown
+    after filtering by size. mode=extras keeps one copy per designed root and
+    quarantines the rest; mode=all quarantines every copy. See
+    dedupe.quarantine_groups for why only groups the section is showing are
+    eligible."""
+    if confirm != "yes":
+        return flash_redirect("#duplicates", "Not confirmed — nothing changed.")
+    if mode not in ("extras", "all"):
+        return flash_redirect("#duplicates", "Unknown bulk action — nothing changed.")
+    config = get_config(request)
+    quarantine_dir = config.db_path.parent / "quarantine"
+    with get_conn(request) as conn:
+        result = dedupe.quarantine_groups(conn, quarantine_dir, hashes, mode)
+
+    what = "all copies" if mode == "all" else "extra copies"
+    msg = f"Quarantined {result['quarantined']} {what} across {result['groups']} group(s) ({human_bytes(result['bytes'])})."
+    if result["ignored"]:
+        msg += f" {result['ignored']} group(s) skipped: no longer listed as duplicates."
+    if result["skipped"]:
+        msg += f" {len(result['skipped'])} file(s) couldn't be moved — first: {result['skipped'][0]}"
+    return flash_redirect("#duplicates", msg)
 
 
 # ---------------------------------------------------------------------- trash
