@@ -11,6 +11,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import junk
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS roots (
     label TEXT PRIMARY KEY,
@@ -645,6 +647,17 @@ def update_file_guess(conn: sqlite3.Connection, file_id: int, title: str | None,
 
 def delete_file_row(conn: sqlite3.Connection, root_label: str, rel_path: str) -> None:
     conn.execute("DELETE FROM files WHERE root_label=? AND rel_path=?", (root_label, rel_path))
+
+
+def purge_junk_rows(conn: sqlite3.Connection, root_label: str) -> int:
+    """Deletes (not marks missing) index rows for OS junk (see junk.py) left by
+    scans from before it was excluded. Deleting matters: a row marked
+    `missing` reads as "this file was deleted from the root", which sync would
+    turn into deletion candidates for the other side."""
+    rows = conn.execute("SELECT rel_path FROM files WHERE root_label=?", (root_label,)).fetchall()
+    junk_paths = [(root_label, r["rel_path"]) for r in rows if junk.is_junk_path(r["rel_path"])]
+    conn.executemany("DELETE FROM files WHERE root_label=? AND rel_path=?", junk_paths)
+    return len(junk_paths)
 
 
 def add_quarantine_record(

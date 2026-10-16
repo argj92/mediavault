@@ -21,6 +21,10 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
     if not root.path.exists():
         raise FileNotFoundError(f"Root {root.label!r} path does not exist: {root.path}")
 
+    # Rows for OS junk indexed before junk.py existed: delete them outright up
+    # front so they never show up as sync conflicts/promotions/"gone" files.
+    db.purge_junk_rows(conn, root.label)
+
     scan_started_at = time.time()
     scan_id = db.start_scan(conn, root.label)
 
