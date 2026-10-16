@@ -36,6 +36,16 @@ def _load(config_path: Optional[Path] = None) -> AppConfig:
         raise typer.Exit(1)
 
 
+def _claim_instance(config: AppConfig) -> None:
+    from . import instance
+
+    try:
+        instance.acquire(config.db_path)
+    except instance.AlreadyRunning as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+
 def _human(n) -> str:
     if n is None:
         return "-"
@@ -404,6 +414,7 @@ def web(
     from .web.serve import serve
 
     config = _load()
+    _claim_instance(config)
     configure(config)
 
     if open_browser:
@@ -422,6 +433,7 @@ def gui():
     from .gui.app import run_gui
 
     config = _load()
+    _claim_instance(config)
     run_gui(config)
 
 
