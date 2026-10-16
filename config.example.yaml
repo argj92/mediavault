@@ -33,6 +33,14 @@ scan_interval_minutes: 15
 # happened while notifications were off.
 notifications_enabled: true
 
+# Extra hostnames the web UI will answer to, beyond localhost, this machine's
+# own hostname, and its Tailscale MagicDNS name (detected automatically). Any
+# IP address is always accepted. Requests whose Host header isn't one of
+# these are refused -- that's what stops a malicious web page from using DNS
+# rebinding to drive the UI. Add a name here only if you reach MediaVault
+# through one that isn't covered (e.g. a reverse-proxy hostname).
+# allowed_hosts: ["mediavault.example.lan"]
+
 # Opt-in: lets this machine find and pair with other mediavault instances on
 # your network (same LAN via mDNS, or anywhere on your Tailscale tailnet) so
 # Protection's cross-machine catalog exchange can happen automatically

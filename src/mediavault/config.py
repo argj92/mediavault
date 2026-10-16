@@ -53,6 +53,7 @@ class AppConfig:
     video_extensions: list[str]
     scan_interval_minutes: int
     notifications_enabled: bool = True
+    allowed_hosts: list[str] = field(default_factory=list)
     enable_lan_discovery: bool = False
     peer_port: int = 8421
     seed_roots: list[RootConfig] = field(default_factory=list)
@@ -109,6 +110,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         video_extensions=raw.get("video_extensions", DEFAULT_VIDEO_EXTENSIONS),
         scan_interval_minutes=int(raw.get("scan_interval_minutes", 15)),
         notifications_enabled=bool(raw.get("notifications_enabled", True)),
+        allowed_hosts=[str(h) for h in raw.get("allowed_hosts", [])],
         enable_lan_discovery=bool(raw.get("enable_lan_discovery", False)),
         peer_port=int(raw.get("peer_port", 8421)),
         seed_roots=seed_roots,

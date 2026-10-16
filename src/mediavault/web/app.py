@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
+from .guard import RequestGuard
 
 BASE_DIR = Path(__file__).parent
 log = logging.getLogger("mediavault.web")
@@ -106,6 +107,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MediaVault", lifespan=lifespan)
+app.add_middleware(RequestGuard)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
