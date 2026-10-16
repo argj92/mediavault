@@ -24,13 +24,13 @@ backups" hole, which no ACL can.
 """
 from __future__ import annotations
 
-import functools
 import ipaddress
 import json
-import shutil
 import socket
 import subprocess
 from urllib.parse import urlsplit
+
+from ..tailscale import find_tailscale
 
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -57,11 +57,18 @@ def _is_ip(host: str) -> bool:
     return True
 
 
-@functools.lru_cache(maxsize=1)
+_ts_name: str | None = None
+
+
 def tailscale_dns_name() -> str | None:
     """This machine's MagicDNS name (e.g. 'mac-mini.tailnet.ts.net'), if
-    Tailscale is installed and up. Best-effort: None on any failure."""
-    exe = shutil.which("tailscale")
+    Tailscale is installed and up. Best-effort: None on any failure. Only a
+    success is remembered -- a failure (Tailscale not up yet at login) is
+    retried rather than blocking the name for the life of the process."""
+    global _ts_name
+    if _ts_name:
+        return _ts_name
+    exe = find_tailscale()
     if not exe:
         return None
     try:
@@ -69,7 +76,16 @@ def tailscale_dns_name() -> str | None:
         name = json.loads(out).get("Self", {}).get("DNSName", "")
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    return name.rstrip(".").lower() or None
+    _ts_name = name.rstrip(".").lower() or None
+    return _ts_name
+
+
+# Tailscale's own domain for MagicDNS names. Only Tailscale can publish records
+# under it, and a name there resolves to a tailnet address -- never to this
+# machine's loopback -- so it can't be used for DNS rebinding the way an
+# attacker-controlled domain can. Accepting the suffix means the UI works over
+# the tailnet even when the CLI can't be asked for our exact name.
+TAILSCALE_SUFFIX = ".ts.net"
 
 
 def allowed_names(config) -> set[str]:
@@ -85,7 +101,7 @@ def allowed_names(config) -> set[str]:
 
 def host_ok(hostname: str, names: set[str]) -> bool:
     # An IP literal can't be a DNS-rebinding vector (rebinding needs a name).
-    return _is_ip(hostname) or hostname in names
+    return _is_ip(hostname) or hostname in names or hostname.endswith(TAILSCALE_SUFFIX)
 
 
 class RequestGuard:
