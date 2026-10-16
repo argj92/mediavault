@@ -149,3 +149,10 @@ def test_static_assets_are_versioned_so_updates_beat_the_browser_cache(client):
     assert 'href="/static/style.css?v=' in page and 'src="/static/live.js?v=' in page
     assert web_app.static_url("style.css") != "/static/style.css?v=0"      # real mtime, not the fallback
     assert c.get(web_app.static_url("style.css")).status_code == 200       # the query string doesn't break serving
+
+
+def test_ok_state_mentions_files_that_are_only_in_the_cloud():
+    d = web_app.describe_root
+    last = {"finished_at": time.time(), "files_scanned": 501, "placeholders": 461}
+    assert "461 in the cloud only" in d(_row(), _status(last=last), True)["text"]
+    assert "cloud" not in d(_row(), _status(last={**last, "placeholders": 0}), True)["text"]

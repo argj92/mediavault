@@ -6,6 +6,7 @@ missing/deleted just because their content isn't local yet.
 """
 from __future__ import annotations
 
+import errno
 import sqlite3
 import time
 from pathlib import Path
@@ -13,6 +14,28 @@ from pathlib import Path
 from . import cloud, db
 from .config import RootConfig
 from .hashing import hash_file, quick_signature, resolve_algo
+
+
+# A single file that can't be read right now isn't a reason to abandon the
+# whole root: EDEADLK is macOS refusing to download an iCloud file for a
+# background process; EACCES/EPERM is a privacy (TCC) or permission refusal.
+# Everything else (EIO, ENOTCONN, ESTALE, ...) means the drive or share itself
+# is in trouble and still aborts the scan.
+_SKIPPABLE_FILE_ERRNOS = {errno.EDEADLK, errno.EACCES, errno.EPERM}
+
+
+def _keep_as_unreadable(conn, root, rel_path: str, size=None) -> None:
+    """Record a file that is present but can't be read right now, the way a
+    not-downloaded placeholder is: indexed (so it isn't mistaken for deleted),
+    with whatever size/hash we already knew, and no new hashing."""
+    existing = db.get_file(conn, root.label, rel_path)
+    db.upsert_file(
+        conn, root.label, rel_path,
+        size=existing["size"] if existing else size,
+        mtime=existing["mtime"] if existing else None,
+        hash_=existing["hash"] if existing else None,
+        is_placeholder=True,
+    )
 
 
 def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blake3") -> dict:
@@ -34,7 +57,7 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
     scan_id = db.start_scan(conn, root.label)
 
     try:
-        stats = {"files_scanned": 0, "new_files": 0, "updated_files": 0, "missing_files": 0, "placeholders": 0}
+        stats = {"files_scanned": 0, "new_files": 0, "updated_files": 0, "missing_files": 0, "placeholders": 0, "unreadable": 0}
         last_progress_commit = time.monotonic()
 
         for entry in cloud.walk_cloud_aware(root.path):
@@ -59,7 +82,7 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
                     stats["new_files"] += 1
                 db.upsert_file(
                     conn, root.label, entry.rel_path,
-                    size=existing["size"] if existing else None,
+                    size=existing["size"] if existing else entry.size,
                     mtime=existing["mtime"] if existing else None,
                     hash_=existing["hash"] if existing else None,
                     is_placeholder=True,
@@ -67,7 +90,14 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
                 continue
 
             full_path = root.path / entry.rel_path
-            size, mtime = quick_signature(full_path)
+            try:
+                size, mtime = quick_signature(full_path)
+            except OSError as exc:
+                if exc.errno not in _SKIPPABLE_FILE_ERRNOS:
+                    raise
+                stats["unreadable"] += 1
+                _keep_as_unreadable(conn, root, entry.rel_path)
+                continue
             existing = db.get_file(conn, root.label, entry.rel_path)
 
             if (
@@ -82,7 +112,14 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
                 db.upsert_file(conn, root.label, entry.rel_path, size, mtime, existing["hash"], is_placeholder=False)
                 continue
 
-            file_hash = hash_file(full_path, algo=algo)
+            try:
+                file_hash = hash_file(full_path, algo=algo)
+            except OSError as exc:
+                if exc.errno not in _SKIPPABLE_FILE_ERRNOS:
+                    raise
+                stats["unreadable"] += 1
+                _keep_as_unreadable(conn, root, entry.rel_path, size=size)
+                continue
             if existing is None:
                 stats["new_files"] += 1
             else:

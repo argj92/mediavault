@@ -11,12 +11,24 @@ downloads of the whole library and never mistakes "not downloaded" for
 from __future__ import annotations
 
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import junk
 
 PLACEHOLDER_SUFFIX = ".icloud"
+
+# Current macOS doesn't leave ".name.icloud" stubs for evicted files: the file
+# keeps its real name and size but has no data on disk, flagged "dataless"
+# (SF_DATALESS) with zero blocks. Reading it makes macOS download the whole
+# file -- from a background service the read instead fails with EDEADLK
+# ("Resource deadlock avoided"). stat() alone is safe and never downloads.
+SF_DATALESS = getattr(stat, "SF_DATALESS", 0x40000000)
+
+
+def is_dataless(st) -> bool:
+    return bool(getattr(st, "st_flags", 0) & SF_DATALESS)
 
 
 def is_placeholder(entry_name: str) -> bool:
@@ -34,6 +46,7 @@ class CloudEntry:
     rel_path: str
     downloaded: bool
     local_size: int | None  # None when it's a placeholder we can't size
+    size: int | None = None  # the file's real size when known, even if it isn't downloaded
 
 
 def walk_cloud_aware(root: Path):
@@ -60,7 +73,11 @@ def walk_cloud_aware(root: Path):
                 yield CloudEntry(rel_path=real_rel.as_posix(), downloaded=False, local_size=None)
             else:
                 rel = full.relative_to(root)
-                yield CloudEntry(rel_path=rel.as_posix(), downloaded=True, local_size=full.stat().st_size)
+                st = full.stat()
+                if is_dataless(st):
+                    yield CloudEntry(rel_path=rel.as_posix(), downloaded=False, local_size=None, size=st.st_size)
+                else:
+                    yield CloudEntry(rel_path=rel.as_posix(), downloaded=True, local_size=st.st_size, size=st.st_size)
 
 
 def largest_downloaded_files(root: Path, top_n: int = 25) -> list[tuple[str, int]]:
