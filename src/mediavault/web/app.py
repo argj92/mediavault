@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, recycle_bin, scheduler, suggestions, sync
+from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, reconnect, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 from ..lan import LanDiscovery
 from .guard import RequestGuard
@@ -406,6 +406,10 @@ def index(request: Request, msg: str | None = None):
         {
             "msg": msg,
             "root_states": root_states,
+            "root_candidates": {
+                r["label"]: reconnect.candidate_paths(r["path"])
+                for r in roots if root_states[r["label"]]["state"] == "offline"
+            },
             "offline_roots": {label for label, st in root_states.items() if st["state"] == "offline"},
             "attn_counts": attn_counts,
             "attention": ATTENTION,
@@ -539,6 +543,52 @@ def roots_update(request: Request, label: str, role: str = Form(...), mode: str 
             return flash_redirect("#roots", _PRIMARY_CONFLICT_MSG)
         db.update_root_role_mode(conn, label, role, mode)
     return flash_redirect("#roots", f"Updated '{label}' to {role}/{mode}.")
+
+
+@app.post("/roots/{label}/mount-url")
+def roots_mount_url(request: Request, label: str, mount_url: str = Form("")):
+    """Where to re-mount a network-share root from (e.g. smb://nas.local/Videos).
+    Empty clears it."""
+    with get_conn(request) as conn:
+        if db.get_root(conn, label) is None:
+            return flash_redirect("#roots", f"No such root '{label}'.")
+        if mount_url.strip():
+            try:
+                mount_url = reconnect.validate_mount_url(mount_url)
+            except ValueError as exc:
+                return flash_redirect("#roots", str(exc))
+        db.set_root_mount_url(conn, label, mount_url.strip() or None)
+    return flash_redirect("#roots", f"Saved the network address for '{label}'." if mount_url.strip() else f"Cleared it for '{label}'.")
+
+
+@app.post("/roots/{label}/reconnect")
+def roots_reconnect(request: Request, label: str):
+    """Asks macOS to mount the root's saved share again. The address comes
+    from what was saved on the root, never from this request."""
+    with get_conn(request) as conn:
+        row = db.get_root(conn, label)
+    if row is None:
+        return flash_redirect("#roots", f"No such root '{label}'.")
+    if not row["mount_url"]:
+        return flash_redirect("#roots", f"No network address saved for '{label}' yet -- add one under “Network login”.")
+    ok, message = reconnect.reconnect(row["mount_url"], row["path"])
+    if ok:
+        message = f"'{label}' is connected again. Use Scan now to refresh it."
+    return flash_redirect("#roots", message)
+
+
+@app.post("/roots/{label}/use-path")
+def roots_use_path(request: Request, label: str, path: str = Form(...)):
+    """The share came back mounted under a different name (/Volumes/x-1).
+    Only a place the server itself found for this root is accepted."""
+    with get_conn(request) as conn:
+        row = db.get_root(conn, label)
+        if row is None:
+            return flash_redirect("#roots", f"No such root '{label}'.")
+        if path not in {str(c) for c in reconnect.candidate_paths(row["path"])}:
+            return flash_redirect("#roots", "That isn't a place this folder was found -- nothing changed.")
+        db.set_root_path(conn, label, path)
+    return flash_redirect("#roots", f"'{label}' now points at {path}. Use Scan now to refresh it.")
 
 
 @app.post("/roots/{label}/toggle")

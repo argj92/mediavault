@@ -96,6 +96,29 @@
           <span class="root-text js-root-text" title="{{ st.detail }}">{{ st.text }}</span>
         </header>
         <div class="path">{{ r.path }}</div>
+        <div class="root-net offline-only">
+          {% for c in root_candidates.get(r.label, []) %}
+          <form method="post" action="/roots/{{ r.label }}/use-path" class="root-hint">
+            <span>It's mounted at <code>{{ c }}</code> now.</span>
+            <input type="hidden" name="path" value="{{ c }}"><button>Use this path</button>
+          </form>
+          {% endfor %}
+          {% if r.mount_url %}
+          <form method="post" action="/roots/{{ r.label }}/reconnect" class="root-hint">
+            <span class="subtle">{{ r.mount_url }}</span><button>Reconnect</button>
+          </form>
+          {% else %}
+          <span class="subtle">Mount it in Finder (Go → Connect to Server), or save its address under “Network login” to reconnect from here.</span>
+          {% endif %}
+        </div>
+        <details class="root-net-edit">
+          <summary>Network login</summary>
+          <form method="post" action="/roots/{{ r.label }}/mount-url" class="root-hint">
+            <input name="mount_url" value="{{ r.mount_url or '' }}" placeholder="smb://nas.local/ShareName" aria-label="Network share address">
+            <button>Save</button>
+          </form>
+          <p class="subtle">Used to remount this folder when it drops off, and retried automatically every 10 min. macOS asks for the password on this Mac the first time — tick “Remember this password in my keychain” so it can reconnect by itself. MediaVault never sees or stores the password.</p>
+        </details>
         <div class="root-controls">
           <form method="post" action="/roots/{{ r.label }}/update" class="inline-edit">
             <label>Role
