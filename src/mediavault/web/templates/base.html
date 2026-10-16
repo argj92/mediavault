@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}MediaVault{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -34,6 +34,6 @@
       {% block content %}{% endblock %}
     </main>
   </div>
-  <script src="/static/live.js" defer></script>
+  <script src="{{ static_url('live.js') }}" defer></script>
 </body>
 </html>
