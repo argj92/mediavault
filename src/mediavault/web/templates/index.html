@@ -1,12 +1,27 @@
 {% extends "base.html" %}
 {% block title %}{{ machine }} — MediaVault{% endblock %}
-{% block head %}{% if any_scan_active %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
 {% block content %}
-<h1>{{ machine }}</h1>
-<p class="subtle">Background rescan every {{ scan_interval }} min. Index and config for this machine only — nothing here is shared via git.</p>
-{% if any_scan_active %}
-<p class="subtle">A scan is in progress — this page refreshes itself every 5s while that's true.</p>
-{% endif %}
+<header class="page-head">
+  <h1>{{ machine }}</h1>
+  <p class="subtle">Rescans every {{ scan_interval }} min in the background. Index and config for this machine only — nothing here is shared via git.</p>
+</header>
+
+<div class="statusbar" id="statusbar" aria-label="Status">
+  {% for r in roots %}
+  <a class="chip {{ root_states[r.label].state }}" href="/#roots" data-root-chip="{{ r.label }}">
+    <span class="dot"></span><b>{{ r.label }}</b><span class="chip-text">{{ root_states[r.label].short }}</span>
+  </a>
+  {% endfor %}
+  {% for key, (one, many, anchor) in attention.items() %}
+  <a class="chip attn" href="/#{{ anchor }}" data-attn-chip="{{ key }}"{% if not attn_counts.get(key) %} hidden{% endif %}>
+    <b>{{ attn_counts.get(key, 0) }}</b><span class="chip-text">{{ one if attn_counts.get(key) == 1 else many }}</span>
+  </a>
+  {% endfor %}
+</div>
+<div class="update-banner" id="update-banner" hidden>
+  The library changed in the background.
+  <button type="button" onclick="location.reload()">Reload to see it</button>
+</div>
 
 <!-- ========================================================== LIBRARY -->
 <details id="library" class="section">
@@ -51,54 +66,45 @@
   <div class="section-body">
     <p class="subtle">A root is any folder this machine tracks. Exactly one root should be <b>primary</b> — the single basis every other root syncs against. Mark a folder <b>subset</b> (like an iCloud folder that only holds part of your library) so it's never treated as a deletion source, or <b>mirror</b> for a full backup copy.</p>
 
-    <table>
-      <tr><th>Label</th><th>Role / Mode</th><th>Path</th><th>Enabled</th><th>Scan status</th><th colspan="3">Actions</th></tr>
+    <div class="root-cards">
       {% for r in roots %}
-      {% set status = scan_status[r.label] %}
-      <tr>
-        <td>{{ r.label }}{% if r.role == 'primary' %} <span class="pill ok">basis</span>{% endif %}</td>
-        <td>
+      {% set st = root_states[r.label] %}
+      <article class="root-card {{ st.state }}" data-root="{{ r.label }}">
+        <header>
+          <span class="dot"></span>
+          <h3>{{ r.label }}</h3>
+          {% if r.role == 'primary' %}<span class="pill ok">basis</span>{% endif %}
+          <span class="root-text js-root-text" title="{{ st.detail }}">{{ st.text }}</span>
+        </header>
+        <div class="path">{{ r.path }}</div>
+        <div class="root-controls">
           <form method="post" action="/roots/{{ r.label }}/update" class="inline-edit">
-            <select name="role">
-              <option value="primary" {{ "selected" if r.role == "primary" else "" }}>primary</option>
-              <option value="backup" {{ "selected" if r.role == "backup" else "" }}>backup</option>
-              <option value="icloud" {{ "selected" if r.role == "icloud" else "" }}>icloud</option>
-              <option value="inbox" {{ "selected" if r.role == "inbox" else "" }}>inbox</option>
-            </select>
-            <select name="mode">
-              <option value="mirror" {{ "selected" if r.mode == "mirror" else "" }}>mirror</option>
-              <option value="subset" {{ "selected" if r.mode == "subset" else "" }}>subset</option>
-              <option value="watch" {{ "selected" if r.mode == "watch" else "" }}>watch</option>
-            </select>
+            <label>Role
+              <select name="role">
+                {% for v in ['primary', 'backup', 'icloud', 'inbox'] %}<option value="{{ v }}" {{ "selected" if r.role == v else "" }}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Mode
+              <select name="mode">
+                {% for v in ['mirror', 'subset', 'watch'] %}<option value="{{ v }}" {{ "selected" if r.mode == v else "" }}>{{ v }}</option>{% endfor %}
+              </select>
+            </label>
             <button>Save</button>
           </form>
-        </td>
-        <td class="path">{{ r.path }}</td>
-        <td>{{ "yes" if r.enabled else "no" }}</td>
-        <td>
-          {% if status.active %}
-          <span class="pill warn">scanning… {{ status.active.files_scanned }} file(s) so far</span>
-          {% elif status.last_finished %}
-          <span class="subtle">last scanned {{ status.last_finished.finished_at|time_ago }} — {{ status.last_finished.files_scanned }} file(s)</span>
-          {% elif status.abandoned %}
-          <span class="subtle" title="Started {{ status.abandoned.started_at|time_ago }} and never finished — the process may have crashed, been force-quit, or slept mid-scan.">{{ status.abandoned.files_scanned }} file(s) indexed, didn't finish — click Scan now to retry</span>
-          {% else %}
-          <span class="subtle">never scanned yet</span>
-          {% endif %}
-        </td>
-        <td><form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form></td>
-        <td><form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form></td>
-        <td>
-          <form method="post" action="/roots/{{ r.label }}/delete" onsubmit="return confirm('Remove {{ r.label }} from tracking? Files on disk are not touched.');">
-            <input type="hidden" name="confirm" value="yes">
-            <button class="danger">Remove</button>
-          </form>
-        </td>
-      </tr>
+          <div class="root-actions">
+            <form method="post" action="/roots/{{ r.label }}/scan"><button>Scan now</button></form>
+            <form method="post" action="/roots/{{ r.label }}/toggle"><button>{{ "Disable" if r.enabled else "Enable" }}</button></form>
+            <form method="post" action="/roots/{{ r.label }}/delete" onsubmit="return confirm('Remove {{ r.label }} from tracking? Files on disk are not touched.');">
+              <input type="hidden" name="confirm" value="yes">
+              <button class="danger">Remove</button>
+            </form>
+          </div>
+        </div>
+      </article>
       {% else %}
-      <tr><td colspan="8" class="subtle">No roots yet — add one below.</td></tr>
+      <p class="subtle">No roots yet — add one below.</p>
       {% endfor %}
-    </table>
+    </div>
 
     <h3>Add a root</h3>
     <form method="post" action="/roots/add" class="form-grid">
@@ -368,33 +374,155 @@
 <!-- ======================================================= DUPLICATES -->
 <details id="duplicates" open class="section">
   <summary>Duplicates <span class="count">{{ dup_groups|length }}</span></summary>
-  <div class="section-body">
-    <p class="subtle">{{ dup_groups|length }} duplicate group(s), {{ wasted_bytes|human_bytes }} reclaimable. Removing a copy moves it to <a href="#recycle-bin">quarantine</a> — nothing is deleted outright.</p>
+  <div class="section-body" id="dup-root">
+    <p class="subtle">{{ dup_groups|length }} duplicate group(s), {{ wasted_bytes|human_bytes }} reclaimable — keeping one copy per primary/backup drive. Removing a copy moves it to <a href="#recycle-bin">quarantine</a> — nothing is deleted outright.</p>
+
+    <div class="dup-hist" role="group" aria-label="Filter duplicates by file size">
+      <div class="dup-hist-head">
+        <span class="subtle">Groups by file size (log scale) — click one or more ranges to filter</span>
+        <button type="button" id="dup-clear" class="linklike" hidden>Clear filter</button>
+      </div>
+      {% for b in dup_histogram %}
+      <button type="button" class="dup-bar{{ ' empty' if not b.groups else '' }}" data-bucket="{{ b.index }}" aria-pressed="false"{{ ' disabled' if not b.groups else '' }}
+              title="{{ b.groups }} group(s), {{ b.wasted_bytes|human_bytes }} reclaimable">
+        <span class="dup-bar-label">{{ b.label }}</span>
+        <span class="dup-bar-track"><span class="dup-bar-fill" style="width: {{ b.pct }}%"></span></span>
+        <span class="dup-bar-count">{{ b.groups }}</span>
+      </button>
+      {% endfor %}
+    </div>
+
+    <div class="dup-toolbar">
+      <span id="dup-showing" class="subtle"></span>
+      <span class="dup-actions">
+        <button type="button" id="dup-expand">Expand all</button>
+        <button type="button" id="dup-collapse">Collapse all</button>
+        <form method="post" action="/duplicates/quarantine-bulk" class="dup-bulk-form" data-mode="extras">
+          <input type="hidden" name="mode" value="extras"><input type="hidden" name="confirm" value="yes">
+          <button class="danger" id="dup-bulk-extras" disabled>Keep one copy of each shown group, quarantine the rest</button>
+        </form>
+        <form method="post" action="/duplicates/quarantine-bulk" class="dup-bulk-form" data-mode="all">
+          <input type="hidden" name="mode" value="all"><input type="hidden" name="confirm" value="yes">
+          <button class="danger" id="dup-bulk-all" disabled>Quarantine all copies of shown groups</button>
+        </form>
+      </span>
+    </div>
 
     {% for g in dup_groups %}
-    <div class="group">
-      <div class="group-head">{{ g.count }} copies &middot; {{ (g.total_size // g.count)|human_bytes }} each &middot; {{ g.wasted_bytes|human_bytes }} wasted</div>
-      <table>
-        <tr><th>Root</th><th>Path</th><th>Size</th><th></th></tr>
-        {% for f in g.files %}
-        <tr>
-          <td>{{ f.root_label }}</td>
-          <td class="path">{{ f.rel_path }}</td>
-          <td>{{ f.size|human_bytes }}</td>
-          <td>
-            <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
-              <input type="hidden" name="root_label" value="{{ f.root_label }}">
-              <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
-              <button class="danger">Quarantine this copy</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-    </div>
+    {% set keep_ids = g.keepers|map(attribute='id')|list %}
+    <details class="dup-group" data-hash="{{ g.hash }}" data-bucket="{{ g.bucket }}" data-copies="{{ g.count }}" data-extras="{{ g.extras|length }}" data-each="{{ g.each_size }}" data-wasted="{{ g.wasted_bytes }}">
+      <summary>
+        <span class="dup-name">{{ g.keepers[0].rel_path.split('/')[-1] }}</span>
+        <span class="subtle">{{ g.count }} copies &middot; {{ g.each_size|human_bytes }} each &middot; {{ g.wasted_bytes|human_bytes }} reclaimable</span>
+      </summary>
+      <div class="dup-body">
+        <table>
+          <tr><th></th><th>Root</th><th>Path</th><th>Size</th><th></th></tr>
+          {% for f in g.files %}
+          <tr>
+            <td>{% if f.id in keep_ids %}<span class="pill ok">keep</span>{% else %}<span class="pill warn">extra</span>{% endif %}</td>
+            <td>{{ f.root_label }}</td>
+            <td class="path">{{ f.rel_path }}</td>
+            <td>{{ f.size|human_bytes }}</td>
+            <td>
+              <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
+                <input type="hidden" name="root_label" value="{{ f.root_label }}">
+                <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
+                <button class="danger">Quarantine this copy</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </table>
+        <div class="dup-group-actions">
+          {% if g.extras %}
+          <form method="post" action="/duplicates/quarantine-bulk" onsubmit="return confirm('Keep the copies marked keep and quarantine the {{ g.extras|length }} extra one(s)?');">
+            <input type="hidden" name="hashes" value="{{ g.hash }}"><input type="hidden" name="mode" value="extras"><input type="hidden" name="confirm" value="yes">
+            <button class="danger">Quarantine the {{ g.extras|length }} extra cop{{ 'y' if g.extras|length == 1 else 'ies' }}</button>
+          </form>
+          {% endif %}
+          <form method="post" action="/duplicates/quarantine-bulk" onsubmit="return confirm('Quarantine ALL {{ g.count }} copies of this file? It will be gone from every drive (recoverable from Recycle Bin until purged).');">
+            <input type="hidden" name="hashes" value="{{ g.hash }}"><input type="hidden" name="mode" value="all"><input type="hidden" name="confirm" value="yes">
+            <button class="danger">Quarantine all {{ g.count }} copies</button>
+          </form>
+        </div>
+      </div>
+    </details>
     {% endfor %}
   </div>
 </details>
+<script>
+(function () {
+  const root = document.getElementById('dup-root');
+  if (!root) return;
+  const groups = Array.from(root.querySelectorAll('.dup-group'));
+  const bars = Array.from(root.querySelectorAll('.dup-bar'));
+  const selected = new Set();
+  const clearBtn = document.getElementById('dup-clear');
+  const showing = document.getElementById('dup-showing');
+  const bulkExtras = document.getElementById('dup-bulk-extras');
+  const bulkAll = document.getElementById('dup-bulk-all');
+
+  function fmt(n) {
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
+  }
+  const isShown = g => selected.size === 0 || selected.has(g.dataset.bucket);
+
+  function totals() {
+    const t = {shown: 0, copies: 0, extras: 0, wasted: 0, allBytes: 0, list: []};
+    groups.forEach(g => {
+      const on = isShown(g);
+      g.hidden = !on;
+      if (!on) return;
+      t.shown++; t.list.push(g);
+      t.copies += +g.dataset.copies; t.extras += +g.dataset.extras; t.wasted += +g.dataset.wasted;
+      t.allBytes += +g.dataset.each * +g.dataset.copies;
+    });
+    return t;
+  }
+
+  function refresh() {
+    const t = totals();
+    bars.forEach(b => b.setAttribute('aria-pressed', selected.has(b.dataset.bucket) ? 'true' : 'false'));
+    clearBtn.hidden = selected.size === 0;
+    showing.textContent = 'Showing ' + t.shown + ' of ' + groups.length + ' group(s) · ' + fmt(t.wasted) + ' reclaimable';
+    bulkExtras.disabled = t.extras === 0;
+    bulkAll.disabled = t.shown === 0;
+    bulkExtras.textContent = 'Keep one copy of each shown group, quarantine the ' + t.extras + ' extra(s)';
+    bulkAll.textContent = 'Quarantine all ' + t.copies + ' copies of shown groups';
+  }
+
+  bars.forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.bucket;
+    selected.has(k) ? selected.delete(k) : selected.add(k);
+    refresh();
+  }));
+  clearBtn.addEventListener('click', () => { selected.clear(); refresh(); });
+  document.getElementById('dup-expand').addEventListener('click', () => groups.forEach(g => { if (!g.hidden) g.open = true; }));
+  document.getElementById('dup-collapse').addEventListener('click', () => groups.forEach(g => { g.open = false; }));
+
+  root.querySelectorAll('.dup-bulk-form').forEach(form => form.addEventListener('submit', e => {
+    const t = totals();
+    const all = form.dataset.mode === 'all';
+    const scope = selected.size === 0 ? 'ALL ' + t.shown + ' duplicate group(s)' : t.shown + ' shown group(s)';
+    let msg = all
+      ? 'Move ALL ' + t.copies + ' copies of ' + scope + ' (' + fmt(t.allBytes) + ') to quarantine?\n\nEvery copy leaves every drive. Recoverable from Recycle Bin until purged.'
+      : 'Keep one copy per drive for ' + scope + ' and move ' + t.extras + ' extra file(s) (' + fmt(t.wasted) + ') to quarantine?';
+    if ((all ? t.allBytes : t.wasted) > 5 * 1024 ** 3) msg += '\n\nThat is a lot of data to move off the drive(s) — it may take several minutes.';
+    if (!confirm(msg)) { e.preventDefault(); return; }
+    form.querySelectorAll('input[name="hashes"]').forEach(i => i.remove());
+    t.list.forEach(g => {
+      const i = document.createElement('input');
+      i.type = 'hidden'; i.name = 'hashes'; i.value = g.dataset.hash;
+      form.appendChild(i);
+    });
+  }));
+  refresh();
+})();
+</script>
 {% endif %}
 
 {% if untracked_count %}

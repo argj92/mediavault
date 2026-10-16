@@ -8,12 +8,32 @@
   {% block head %}{% endblock %}
 </head>
 <body>
-  <nav class="topnav">
-    <a class="brand" href="/">MediaVault</a>
-  </nav>
-  <main>
-    {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
-    {% block content %}{% endblock %}
-  </main>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/">MediaVault</a>
+      {% if machine %}<div class="machine">{{ machine }}</div>{% endif %}
+      <nav class="nav" aria-label="Sections">
+        {% for group, items in nav_groups %}
+        <div class="nav-group">
+          <div class="nav-title">{{ group }}</div>
+          {% for id, label in items %}
+          <a href="/#{{ id }}" data-section="{{ id }}">
+            <span>{{ label }}</span>
+            <span class="badge{{ ' attn' if id in attn_sections and attn_counts.get(id) else '' }}" data-count="{{ id }}"{% if not attn_counts.get(id) %} hidden{% endif %}>{{ attn_counts.get(id, '') }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endfor %}
+      </nav>
+      <div class="live" id="live-indicator" title="This page checks for changes in the background">
+        <span class="dot"></span><span id="live-text">live</span>
+      </div>
+    </aside>
+    <main>
+      {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="/static/live.js" defer></script>
 </body>
 </html>

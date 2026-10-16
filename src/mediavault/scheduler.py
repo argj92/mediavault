@@ -19,6 +19,9 @@ from .config import AppConfig, RootConfig
 
 log = logging.getLogger("mediavault.scheduler")
 
+RETRY_AFTER_FAILURE_SECONDS = 60
+RETRY_AFTER_SKIPPED_ROOT_SECONDS = 300
+
 
 def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
     """Rescans every enabled root, recomputes duplicate groups and each
@@ -112,13 +115,27 @@ class BackgroundWorker:
             notify_on_changes(conn, summary, self.config)
             return summary
 
+    def _next_delay(self, summary: dict | None) -> float:
+        """Seconds until the next cycle. After a cycle that failed outright,
+        or skipped a root (drive/share not mounted), look again soon rather
+        than waiting out the full interval -- a Network Drive that comes back
+        shouldn't sit unindexed for another 15+ minutes (an interval of 24 h
+        would be a full day). Never *longer* than the configured interval."""
+        interval = self.config.scan_interval_minutes * 60
+        if summary is None:
+            return min(interval, RETRY_AFTER_FAILURE_SECONDS)
+        if summary.get("scan_errors"):
+            return min(interval, RETRY_AFTER_SKIPPED_ROOT_SECONDS)
+        return interval
+
     def _loop(self) -> None:
         while not self._stop.is_set():
+            summary = None
             try:
-                self._run_cycle()
+                summary = self._run_cycle()
             except Exception:  # noqa: BLE001 — one bad cycle shouldn't kill the worker
                 log.exception("mediavault background reconcile cycle failed")
-            self._stop.wait(self.config.scan_interval_minutes * 60)
+            self._stop.wait(self._next_delay(summary))
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():

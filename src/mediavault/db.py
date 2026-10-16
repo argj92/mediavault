@@ -12,6 +12,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import junk
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS roots (
     label TEXT PRIMARY KEY,
@@ -111,7 +113,8 @@ CREATE TABLE IF NOT EXISTS scans (
     new_files INTEGER DEFAULT 0,
     updated_files INTEGER DEFAULT 0,
     missing_files INTEGER DEFAULT 0,
-    placeholders INTEGER DEFAULT 0
+    placeholders INTEGER DEFAULT 0,
+    error TEXT  -- set when the scan died partway (finished_at is then also set)
 );
 
 -- This machine's own stable identity for LAN pairing -- independent of
@@ -207,6 +210,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     # Migration: sync_pairs (manual pairwise wiring) was replaced by a single
     # primary-root basis that every other root syncs against automatically.
     conn.execute("DROP TABLE IF EXISTS sync_pairs")
+    # Migration: scans.error (a failed scan is recorded as failed, not left "running").
+    if "error" not in {r[1] for r in conn.execute("PRAGMA table_info(scans)")}:
+        conn.execute("ALTER TABLE scans ADD COLUMN error TEXT")
 
 
 def upsert_root(conn: sqlite3.Connection, label: str, path: str, role: str, mode: str, enabled: bool = True) -> None:
@@ -514,26 +520,56 @@ def get_active_scan(conn: sqlite3.Connection, root_label: str, stale_after_secon
 
 def get_last_finished_scan(conn: sqlite3.Connection, root_label: str) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NOT NULL AND error IS NULL ORDER BY finished_at DESC LIMIT 1",
         (root_label,),
     ).fetchone()
 
 
 def get_abandoned_scan(conn: sqlite3.Connection, root_label: str, stale_after_seconds: float = 6 * 3600) -> sqlite3.Row | None:
-    """The inverse of get_active_scan's staleness check: a scan attempt that
-    never finished and is old enough it's not legitimately still running --
-    most likely the process crashed, was force-quit, or the machine slept
-    mid-scan. scan_root commits progress periodically, so whatever it
-    indexed before that point is real, already-committed data; this lets the
-    UI say so ("N file(s) indexed, didn't finish") instead of the misleading
-    "never scanned yet" when real content already exists in the index."""
+    """The latest scan attempt that did not complete: one that died with an
+    error (recorded by fail_scan), or one that never finished and is old
+    enough it's not legitimately still running -- most likely the process
+    crashed, was force-quit, or the machine slept mid-scan. scan_root commits
+    progress periodically, so whatever it indexed before that point is real,
+    already-committed data; this lets the UI say so ("N file(s) indexed,
+    didn't finish") instead of the misleading "never scanned yet" when real
+    content already exists in the index."""
     row = conn.execute(
-        "SELECT * FROM scans WHERE root_label=? AND finished_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        "SELECT * FROM scans WHERE root_label=? AND (finished_at IS NULL OR error IS NOT NULL) "
+        "ORDER BY started_at DESC LIMIT 1",
         (root_label,),
     ).fetchone()
-    if row is not None and time.time() - row["started_at"] > stale_after_seconds:
+    if row is None:
+        return None
+    if row["error"] is not None or time.time() - row["started_at"] > stale_after_seconds:
         return row
     return None
+
+
+SCAN_HISTORY_PER_ROOT = 20
+
+
+def _prune_scans(conn: sqlite3.Connection, root_label: str) -> None:
+    """The scans table gets a row per root per cycle (every few minutes, for
+    as long as the service runs). Keep a short history plus the most recent
+    successful scan, which the UI still needs after a run of failures."""
+    conn.execute(
+        """DELETE FROM scans WHERE root_label=? AND id NOT IN (
+               SELECT id FROM scans WHERE root_label=? ORDER BY id DESC LIMIT ?)
+           AND id NOT IN (
+               SELECT id FROM scans WHERE root_label=? AND finished_at IS NOT NULL AND error IS NULL
+               ORDER BY finished_at DESC LIMIT 1)""",
+        (root_label, root_label, SCAN_HISTORY_PER_ROOT, root_label),
+    )
+
+
+def fail_scan(conn: sqlite3.Connection, scan_id: int, error: str) -> None:
+    """Closes out a scan that died partway, so it stops showing as
+    "scanning..." (up to 6h otherwise) and the UI can say what happened."""
+    row = conn.execute("SELECT root_label FROM scans WHERE id=?", (scan_id,)).fetchone()
+    conn.execute("UPDATE scans SET finished_at=?, error=? WHERE id=?", (time.time(), error[:500], scan_id))
+    if row is not None:
+        _prune_scans(conn, row["root_label"])
 
 
 def finish_scan(conn: sqlite3.Connection, scan_id: int, stats: dict) -> None:
@@ -550,6 +586,9 @@ def finish_scan(conn: sqlite3.Connection, scan_id: int, stats: dict) -> None:
             scan_id,
         ),
     )
+    row = conn.execute("SELECT root_label FROM scans WHERE id=?", (scan_id,)).fetchone()
+    if row is not None:
+        _prune_scans(conn, row["root_label"])
 
 
 def get_file(conn: sqlite3.Connection, root_label: str, rel_path: str) -> sqlite3.Row | None:
@@ -663,6 +702,17 @@ def update_file_guess(conn: sqlite3.Connection, file_id: int, title: str | None,
 
 def delete_file_row(conn: sqlite3.Connection, root_label: str, rel_path: str) -> None:
     conn.execute("DELETE FROM files WHERE root_label=? AND rel_path=?", (root_label, rel_path))
+
+
+def purge_junk_rows(conn: sqlite3.Connection, root_label: str) -> int:
+    """Deletes (not marks missing) index rows for OS junk (see junk.py) left by
+    scans from before it was excluded. Deleting matters: a row marked
+    `missing` reads as "this file was deleted from the root", which sync would
+    turn into deletion candidates for the other side."""
+    rows = conn.execute("SELECT rel_path FROM files WHERE root_label=?", (root_label,)).fetchall()
+    junk_paths = [(root_label, r["rel_path"]) for r in rows if junk.is_junk_path(r["rel_path"])]
+    conn.executemany("DELETE FROM files WHERE root_label=? AND rel_path=?", junk_paths)
+    return len(junk_paths)
 
 
 def add_quarantine_record(

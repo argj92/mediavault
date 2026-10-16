@@ -25,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, recycle_bin, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 from ..lan import LanDiscovery
+from .guard import RequestGuard
 
 BASE_DIR = Path(__file__).parent
 log = logging.getLogger("mediavault.web")
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="MediaVault", lifespan=lifespan)
+app.add_middleware(RequestGuard)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -89,6 +91,90 @@ def time_ago(unix_ts) -> str:
 templates.env.filters["human_bytes"] = human_bytes
 templates.env.filters["time_ago"] = time_ago
 
+# Sidebar: (group, [(section id, label)]). Section ids match the <details id>
+# blocks in index.html.
+templates.env.globals["nav_groups"] = [
+    ("Library", [("library", "Browse"), ("roots", "Roots")]),
+    ("Keep in order", [("sync", "Sync"), ("promote", "Promote"), ("duplicates", "Duplicates"), ("suggestions", "Suggestions")]),
+    ("Backups & devices", [("protection", "Protection"), ("peers", "Peers")]),
+    ("Storage", [("icloud", "iCloud"), ("recycle-bin", "Recycle bin"), ("metadata", "Metadata")]),
+]
+# Counts that mean "something wants your attention" (amber badge, and a chip in
+# the status strip when non-zero): key -> (singular, plural, section anchor).
+ATTENTION = {
+    "duplicates": ("duplicate group", "duplicate groups", "duplicates"),
+    "sync": ("root out of sync", "roots out of sync", "sync"),
+    "promote": ("file to promote", "files to promote", "promote"),
+    "suggestions": ("new file found", "new files found", "suggestions"),
+    "peers": ("pairing request", "pairing requests", "peers"),
+}
+templates.env.globals["attn_sections"] = set(ATTENTION)
+templates.env.globals["attn_counts"] = {}
+
+
+def attention_counts(dup_groups, sync_statuses, promote_count, untracked_count, quarantine_count, pending_pairings) -> dict:
+    """What the sidebar badges and status-strip chips show. A pure function of
+    values the full page has already computed (index) or that the cheap poll
+    endpoint computes itself, so both agree."""
+    return {
+        "duplicates": len(dup_groups),
+        "sync": sum(1 for s in sync_statuses if s["plan"].out_of_sync),
+        "promote": promote_count,
+        "suggestions": untracked_count,
+        "peers": len(pending_pairings),
+        "recycle-bin": quarantine_count,
+    }
+
+
+def root_reachable(path) -> bool:
+    try:
+        return Path(path).exists()
+    except OSError:  # a stale network mount can raise instead of answering
+        return False
+
+
+def describe_root(root, status: dict, reachable: bool) -> dict:
+    """One root's state for the UI, as words: shared by the full page and the
+    poll endpoint so the two can never disagree about what a root is doing.
+    `state` drives colour/icon; `text` is the card line; `short` the chip."""
+    active, last, abandoned = status["active"], status["last_finished"], status["abandoned"]
+    if not root["enabled"]:
+        return {"state": "disabled", "text": "Disabled — not scanned", "short": "disabled", "detail": ""}
+    if active:
+        n = active["files_scanned"] or 0
+        return {"state": "scanning", "text": f"Scanning… {n:,} file(s) so far", "short": f"scanning {n:,}", "detail": ""}
+    if not reachable:
+        since = f" Last scanned {time_ago(last['finished_at'])}." if last else ""
+        return {"state": "offline", "text": f"Offline — the folder isn't reachable (drive or share not mounted?).{since}",
+                "short": "offline", "detail": root["path"]}
+    if abandoned:
+        n = abandoned["files_scanned"] or 0
+        why = abandoned["error"] or "never finished — the process may have crashed, been force-quit, or slept mid-scan"
+        return {"state": "failed", "text": f"{n:,} file(s) indexed, but the last scan didn't finish — Scan now to retry",
+                "short": "scan incomplete", "detail": why}
+    if last:
+        n = last["files_scanned"] or 0
+        return {"state": "ok", "text": f"Scanned {time_ago(last['finished_at'])} — {n:,} file(s)",
+                "short": f"scanned {time_ago(last['finished_at'])}", "detail": ""}
+    return {"state": "never", "text": "Not scanned yet", "short": "not scanned", "detail": ""}
+
+
+def scan_status_for(conn, roots) -> dict:
+    status = {}
+    for r in roots:
+        active = db.get_active_scan(conn, r["label"])
+        last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
+        status[r["label"]] = {
+            "active": active,
+            "last_finished": last_finished,
+            # A scan that crashed/was killed mid-way still committed real
+            # progress (scan_root commits periodically) -- surface that
+            # instead of falsely claiming "never scanned yet" once both
+            # of the above come back empty.
+            "abandoned": None if (active or last_finished) else db.get_abandoned_scan(conn, r["label"]),
+        }
+    return status
+
 
 def get_config(request: Request) -> AppConfig:
     return request.app.state.config
@@ -102,6 +188,33 @@ def flash_redirect(anchor: str, message: str) -> RedirectResponse:
     """Redirects back to the single page, scrolled to `anchor` (e.g. '#roots'),
     with a flash message."""
     return RedirectResponse(url=f"/?msg={urllib.parse.quote(message)}{anchor}", status_code=303)
+
+
+_SECTION_ANCHORS = {
+    "duplicates": "#duplicates", "sync": "#sync", "promote": "#promote", "roots": "#roots",
+    "recycle-bin": "#recycle-bin", "metadata": "#metadata", "catalog": "#protection", "peers": "#peers",
+}
+
+
+@app.exception_handler(OSError)
+async def drive_error_handler(request: Request, exc: OSError):
+    """Safety net for every route that touches a drive. The drives here are
+    external/network volumes that routinely go away (unmounted share, sleeping
+    NAS, unplugged USB), and an OSError (FileNotFoundError, PermissionError,
+    ConnectionError, ...) escaping a handler used to surface as a bare
+    "Internal Server Error" page with nothing changed and no hint why. Turn
+    it into a message on the dashboard instead; the traceback still goes to
+    the log. Routes with a specific, better message handle their own errors
+    first (see duplicates_quarantine)."""
+    log.error("drive error handling %s %s", request.method, request.url.path, exc_info=exc)
+    message = (
+        "A file operation failed -- a drive or network share may be unmounted or unreachable. "
+        f"Nothing further was changed. ({type(exc).__name__}: {exc.strerror or exc})"
+    )
+    if request.method == "GET":
+        return templates.TemplateResponse(request, "error.html", {"message": message}, status_code=503)
+    section = _SECTION_ANCHORS.get(request.url.path.strip("/").split("/")[0], "")
+    return flash_redirect(section, message)
 
 
 def configure(config: AppConfig) -> FastAPI:
@@ -124,7 +237,13 @@ def seed_roots_if_empty(conn: sqlite3.Connection, config: AppConfig) -> None:
 def api_status(request: Request):
     """Small JSON summary for external dashboards (e.g. Donna's hub) to poll.
     Deliberately cheap — skips the library tree walk and iCloud/protection
-    scans the full index() page does — so it's safe to hit on every refresh."""
+    scans the full index() page does — so it's safe to hit on every refresh.
+
+    This is a contract with out-of-repo consumers, so keep field *types*
+    stable: per root, `last_scan` is the unix timestamp (float) of the last
+    finished scan or null -- consumers do arithmetic on it directly. New
+    detail goes in new sibling keys (`last_scan_files`), never by changing
+    what an existing key holds."""
     config = get_config(request)
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
@@ -134,12 +253,8 @@ def api_status(request: Request):
             last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
             scan_status[r["label"]] = {
                 "active": bool(active),
-                # sqlite3.Row isn't JSON-serializable -- project down to the
-                # fields a dashboard actually needs.
-                "last_finished": None if last_finished is None else {
-                    "finished_at": last_finished["finished_at"],
-                    "files_scanned": last_finished["files_scanned"],
-                },
+                "last_scan": None if last_finished is None else last_finished["finished_at"],
+                "last_scan_files": None if last_finished is None else last_finished["files_scanned"],
             }
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
@@ -155,7 +270,8 @@ def api_status(request: Request):
                 "role": r["role"],
                 "enabled": bool(r["enabled"]),
                 "scanning": scan_status[r["label"]]["active"],
-                "last_scan": scan_status[r["label"]]["last_finished"],
+                "last_scan": scan_status[r["label"]]["last_scan"],
+                "last_scan_files": scan_status[r["label"]]["last_scan_files"],
             }
             for r in roots
         ],
@@ -169,6 +285,40 @@ def api_status(request: Request):
     })
 
 
+@app.get("/api/ui-state")
+def api_ui_state(request: Request, counts: int = 1):
+    """What the page polls to stay live without reloading: each root's state,
+    and (unless `counts=0`) the attention counts. Roots are a few indexed
+    lookups plus an exists() each; the counts re-derive duplicates and sync
+    plans, so the page asks for them less often while a scan is running."""
+    config = get_config(request)
+    with get_conn(request) as conn:
+        roots = db.list_roots(conn)
+        status = scan_status_for(conn, roots)
+        payload = {
+            "server_time": time.time(),
+            "roots": [
+                {
+                    "label": r["label"],
+                    "scanned_at": status[r["label"]]["last_finished"]["finished_at"] if status[r["label"]]["last_finished"] else None,
+                    **describe_root(r, status[r["label"]], root_reachable(r["path"])),
+                }
+                for r in roots
+            ],
+            "any_scan_active": any(s["active"] for s in status.values()),
+        }
+        if counts:
+            sync_statuses = sync.sync_status_for_all(conn)
+            promote_count = sum(len(s["plan"].copy_to_a) for s in sync_statuses)
+            untracked = suggestions.untracked_media(conn, config.video_extensions)
+            payload["counts"] = attention_counts(
+                dedupe.find_duplicates(conn), sync_statuses, promote_count,
+                len([u for u in untracked if not u["already_in_library"]]),
+                len(db.list_quarantine(conn)), db.list_pending_pairings(conn),
+            )
+    return JSONResponse(payload)
+
+
 # --------------------------------------------------------------- single page
 
 @app.get("/")
@@ -176,19 +326,7 @@ def index(request: Request, msg: str | None = None):
     config = get_config(request)
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
-        scan_status = {}
-        for r in roots:
-            active = db.get_active_scan(conn, r["label"])
-            last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
-            scan_status[r["label"]] = {
-                "active": active,
-                "last_finished": last_finished,
-                # A scan that crashed/was killed mid-way still committed real
-                # progress (scan_root commits periodically) -- surface that
-                # instead of falsely claiming "never scanned yet" once both
-                # of the above come back empty.
-                "abandoned": None if (active or last_finished) else db.get_abandoned_scan(conn, r["label"]),
-            }
+        scan_status = scan_status_for(conn, roots)
         any_scan_active = any(s["active"] for s in scan_status.values())
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
@@ -227,6 +365,7 @@ def index(request: Request, msg: str | None = None):
             library_roots.append({"root": r, "tree": tree, "video_count": tree.total_videos()})
 
     has_primary = any(r["role"] == "primary" and r["enabled"] for r in roots)
+    root_states = {r["label"]: describe_root(r, scan_status[r["label"]], root_reachable(r["path"])) for r in roots}
     trash_scan = recycle_bin.scan_trash(top_n=50)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
 
@@ -242,11 +381,20 @@ def index(request: Request, msg: str | None = None):
         seen_ids.add(p.peer_id)
         discovered_peers.append(p)
 
+    attn_counts = attention_counts(
+        dup_groups, sync_statuses, len(promote_candidates), len(new_untracked), len(quarantine_items), pending_pairings
+    )
+    attn_counts["library"] = sum(lr["video_count"] for lr in library_roots)
+    attn_counts["roots"] = len(roots)
+
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "msg": msg,
+            "root_states": root_states,
+            "attn_counts": attn_counts,
+            "attention": ATTENTION,
             "machine": config.machine,
             "scan_interval": config.scan_interval_minutes,
             "roots": roots,
@@ -257,6 +405,7 @@ def index(request: Request, msg: str | None = None):
             "total_bytes": total_bytes,
             "dup_groups": dup_groups,
             "wasted_bytes": dedupe.total_wasted_bytes(dup_groups),
+            "dup_histogram": dedupe.size_histogram(dup_groups),
             "sync_statuses": sync_statuses,
             "untracked_items": untracked,
             "untracked_count": len(new_untracked),
@@ -545,8 +694,45 @@ def duplicates_quarantine(request: Request, root_label: str = Form(...), rel_pat
         root_row = db.get_root(conn, root_label)
         if not root_row:
             return flash_redirect("#duplicates", "No such root.")
-        dedupe.quarantine_duplicate(conn, quarantine_dir, Path(root_row["path"]), root_label, rel_path)
+        try:
+            dedupe.quarantine_duplicate(conn, quarantine_dir, Path(root_row["path"]), root_label, rel_path)
+        except dedupe.QuarantineError as exc:
+            # Caught *inside* the `with` on purpose: for "already gone" the
+            # function drops the stale index row, and that has to commit so
+            # the dashboard stops listing a file that no longer exists. Every
+            # other QuarantineError changes nothing, so committing is a no-op.
+            return flash_redirect("#duplicates", str(exc))
     return flash_redirect("#duplicates", f"Moved '{rel_path}' to quarantine.")
+
+
+@app.post("/duplicates/quarantine-bulk")
+def duplicates_quarantine_bulk(
+    request: Request,
+    hashes: list[str] = Form(...),
+    mode: str = Form(...),
+    confirm: str = Form(...),
+):
+    """Quarantine many duplicate groups at once -- the groups currently shown
+    after filtering by size. mode=extras keeps one copy per designed root and
+    quarantines the rest; mode=all quarantines every copy. See
+    dedupe.quarantine_groups for why only groups the section is showing are
+    eligible."""
+    if confirm != "yes":
+        return flash_redirect("#duplicates", "Not confirmed — nothing changed.")
+    if mode not in ("extras", "all"):
+        return flash_redirect("#duplicates", "Unknown bulk action — nothing changed.")
+    config = get_config(request)
+    quarantine_dir = config.db_path.parent / "quarantine"
+    with get_conn(request) as conn:
+        result = dedupe.quarantine_groups(conn, quarantine_dir, hashes, mode)
+
+    what = "all copies" if mode == "all" else "extra copies"
+    msg = f"Quarantined {result['quarantined']} {what} across {result['groups']} group(s) ({human_bytes(result['bytes'])})."
+    if result["ignored"]:
+        msg += f" {result['ignored']} group(s) skipped: no longer listed as duplicates."
+    if result["skipped"]:
+        msg += f" {len(result['skipped'])} file(s) couldn't be moved — first: {result['skipped'][0]}"
+    return flash_redirect("#duplicates", msg)
 
 
 # ---------------------------------------------------------------------- trash

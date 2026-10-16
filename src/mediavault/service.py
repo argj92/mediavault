@@ -33,12 +33,13 @@ def _log_dir() -> Path:
     return d
 
 
-def install(bin_path: Path, project_dir: Path, config_path: Path, port: int = 8420, host: str = "127.0.0.1") -> str:
+def install(bin_path: Path, project_dir: Path, config_path: Path, port: int = 8420, hosts: list[str] | str = "127.0.0.1") -> str:
+    hosts = [hosts] if isinstance(hosts, str) else list(hosts)
     system = platform.system()
     if system == "Darwin":
-        return _install_macos(bin_path, project_dir, config_path, port, host)
+        return _install_macos(bin_path, project_dir, config_path, port, hosts)
     if system == "Linux":
-        return _install_linux(bin_path, project_dir, config_path, port, host)
+        return _install_linux(bin_path, project_dir, config_path, port, hosts)
     raise RuntimeError(
         f"No automatic background-service support for {system} yet. "
         "Run `mediavault web` (or `gui`) manually, or set up a Scheduled Task yourself."
@@ -69,11 +70,12 @@ def status() -> str:
 
 # ------------------------------------------------------------------- macOS
 
-def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: int, host: str = "127.0.0.1") -> str:
+def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: int, hosts: list[str]) -> str:
     logs = _log_dir()
     plist = _plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
 
+    host_args = "".join(f"        <string>--host</string>\n        <string>{h}</string>\n" for h in hosts)
     content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -84,9 +86,7 @@ def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: i
         <string>{bin_path}</string>
         <string>web</string>
         <string>--no-open-browser</string>
-        <string>--host</string>
-        <string>{host}</string>
-        <string>--port</string>
+{host_args}        <string>--port</string>
         <string>{port}</string>
     </array>
     <key>WorkingDirectory</key><string>{project_dir}</string>
@@ -138,11 +138,12 @@ def _uid() -> int:
 
 # ------------------------------------------------------------------ Linux
 
-def _install_linux(bin_path: Path, project_dir: Path, config_path: Path, port: int, host: str = "127.0.0.1") -> str:
+def _install_linux(bin_path: Path, project_dir: Path, config_path: Path, port: int, hosts: list[str]) -> str:
     logs = _log_dir()
     unit = _unit_path()
     unit.parent.mkdir(parents=True, exist_ok=True)
 
+    host_args = "".join(f"--host {h} " for h in hosts)
     content = f"""[Unit]
 Description=MediaVault background scanner/web UI
 
@@ -150,7 +151,7 @@ Description=MediaVault background scanner/web UI
 Type=simple
 WorkingDirectory={project_dir}
 Environment=MEDIAVAULT_CONFIG={config_path}
-ExecStart={bin_path} web --no-open-browser --host {host} --port {port}
+ExecStart={bin_path} web --no-open-browser {host_args}--port {port}
 Restart=on-failure
 StandardOutput=append:{logs / "service.log"}
 StandardError=append:{logs / "service.err.log"}
