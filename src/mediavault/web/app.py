@@ -459,6 +459,7 @@ def index(request: Request, msg: str | None = None):
             "untracked_count": len(new_untracked),
             "quarantine_items": quarantine_items,
             "quarantine_count": len(quarantine_items),
+            "quarantine_bytes": sum((q["size"] or 0) for q in quarantine_items),
             "metadata_files": metadata_files,
             "icloud_summaries": icloud_summaries,
             "trash_items": trash_scan["items"],
@@ -810,6 +811,20 @@ def quarantine_restore(request: Request, qid: int):
         shutil.move(q["quarantined_path"], str(dest))
         db.remove_quarantine_record(conn, qid)
     return flash_redirect("#recycle-bin", f"Restored '{q['original_rel_path']}'.")
+
+
+@app.post("/recycle-bin/quarantine/purge-all")
+def quarantine_purge_all(request: Request, confirm: str = Form(...), older_than_days: float | None = Form(None)):
+    """Permanently deletes everything in MediaVault's quarantine, or only what
+    has been there more than `older_than_days`."""
+    if confirm != "yes":
+        return flash_redirect("#recycle-bin", "Not confirmed — nothing deleted.")
+    with get_conn(request) as conn:
+        result = dedupe.purge_quarantine(conn, older_than_days)
+    msg = f"Permanently deleted {result['purged']} quarantined file(s), freeing {human_bytes(result['bytes'])}."
+    if result["errors"]:
+        msg += f" {len(result['errors'])} could not be deleted: {result['errors'][0]}"
+    return flash_redirect("#recycle-bin", msg)
 
 
 @app.post("/recycle-bin/quarantine/{qid}/purge")

@@ -159,7 +159,7 @@ def client(tmp_path, monkeypatch):
         recycle_bin, "scan_trash",
         lambda top_n=50: {"items": [], "total_bytes": 0, "accurate": True, "access_errors": []},
     )
-    return TestClient(web_app.app), config
+    return TestClient(web_app.app, base_url="http://127.0.0.1:8420"), config
 
 
 def _flash(r):

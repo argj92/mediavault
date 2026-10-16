@@ -367,3 +367,8 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .dup-name { color: var(--bright); font-weight: 600; overflow-wrap: anywhere; }
 .dup-body { padding: 0 1rem 0.9rem; }
 .dup-group-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; }
+
+/* quarantine summary + purge, shown atop Duplicates and the Recycle Bin */
+.quarantine-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; padding: 0.6rem 0.9rem; margin: 0 0 1rem; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; }
+.quarantine-bar > span { flex: 1 1 18rem; }
+.quarantine-bar button { padding: 0.3rem 0.65rem; font-size: 0.78rem; }

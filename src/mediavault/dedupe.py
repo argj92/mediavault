@@ -184,6 +184,30 @@ def quarantine_groups(
     return result
 
 
+def purge_quarantine(conn: sqlite3.Connection, older_than_days: float | None = None) -> dict:
+    """Permanently deletes quarantined files (all of them, or only those
+    quarantined more than `older_than_days` ago) and drops their records.
+    This is the one irreversible step in duplicate cleanup. A file already
+    gone from the quarantine folder just has its record cleared. Each delete
+    is committed immediately: the file is gone, so the record must not
+    survive a failure later in the run. Returns {purged, bytes, errors}."""
+    cutoff = None if older_than_days is None else time.time() - older_than_days * 86400
+    result = {"purged": 0, "bytes": 0, "errors": []}
+    for q in db.list_quarantine(conn):
+        if cutoff is not None and q["quarantined_at"] > cutoff:
+            continue
+        try:
+            Path(q["quarantined_path"]).unlink(missing_ok=True)
+        except OSError as exc:
+            result["errors"].append(f"{q['original_root']}/{q['original_rel_path']}: {exc.strerror or exc}")
+            continue
+        db.remove_quarantine_record(conn, q["id"])
+        conn.commit()
+        result["purged"] += 1
+        result["bytes"] += q["size"] or 0
+    return result
+
+
 class QuarantineError(Exception):
     """A quarantine that couldn't (fully) happen for a reason worth telling
     the user in plain words -- an unmounted drive, a file that's already
