@@ -139,6 +139,90 @@ def time_ago(unix_ts) -> str:
 templates.env.filters["human_bytes"] = human_bytes
 templates.env.filters["time_ago"] = time_ago
 
+# Sidebar: (group, [(section id, label)]). Section ids match the <details id>
+# blocks in index.html.
+templates.env.globals["nav_groups"] = [
+    ("Library", [("library", "Browse"), ("roots", "Roots")]),
+    ("Keep in order", [("sync", "Sync"), ("promote", "Promote"), ("duplicates", "Duplicates"), ("suggestions", "Suggestions")]),
+    ("Backups & devices", [("protection", "Protection"), ("peers", "Peers")]),
+    ("Storage", [("icloud", "iCloud"), ("recycle-bin", "Recycle bin"), ("metadata", "Metadata")]),
+]
+# Counts that mean "something wants your attention" (amber badge, and a chip in
+# the status strip when non-zero): key -> (singular, plural, section anchor).
+ATTENTION = {
+    "duplicates": ("duplicate group", "duplicate groups", "duplicates"),
+    "sync": ("root out of sync", "roots out of sync", "sync"),
+    "promote": ("file to promote", "files to promote", "promote"),
+    "suggestions": ("new file found", "new files found", "suggestions"),
+    "peers": ("pairing request", "pairing requests", "peers"),
+}
+templates.env.globals["attn_sections"] = set(ATTENTION)
+templates.env.globals["attn_counts"] = {}
+
+
+def attention_counts(dup_groups, sync_statuses, promote_count, untracked_count, quarantine_count, pending_pairings) -> dict:
+    """What the sidebar badges and status-strip chips show. A pure function of
+    values the full page has already computed (index) or that the cheap poll
+    endpoint computes itself, so both agree."""
+    return {
+        "duplicates": len(dup_groups),
+        "sync": sum(1 for s in sync_statuses if s["plan"].out_of_sync),
+        "promote": promote_count,
+        "suggestions": untracked_count,
+        "peers": len(pending_pairings),
+        "recycle-bin": quarantine_count,
+    }
+
+
+def root_reachable(path) -> bool:
+    try:
+        return Path(path).exists()
+    except OSError:  # a stale network mount can raise instead of answering
+        return False
+
+
+def describe_root(root, status: dict, reachable: bool) -> dict:
+    """One root's state for the UI, as words: shared by the full page and the
+    poll endpoint so the two can never disagree about what a root is doing.
+    `state` drives colour/icon; `text` is the card line; `short` the chip."""
+    active, last, abandoned = status["active"], status["last_finished"], status["abandoned"]
+    if not root["enabled"]:
+        return {"state": "disabled", "text": "Disabled — not scanned", "short": "disabled", "detail": ""}
+    if active:
+        n = active["files_scanned"] or 0
+        return {"state": "scanning", "text": f"Scanning… {n:,} file(s) so far", "short": f"scanning {n:,}", "detail": ""}
+    if not reachable:
+        since = f" Last scanned {time_ago(last['finished_at'])}." if last else ""
+        return {"state": "offline", "text": f"Offline — the folder isn't reachable (drive or share not mounted?).{since}",
+                "short": "offline", "detail": root["path"]}
+    if abandoned:
+        n = abandoned["files_scanned"] or 0
+        why = abandoned["error"] or "never finished — the process may have crashed, been force-quit, or slept mid-scan"
+        return {"state": "failed", "text": f"{n:,} file(s) indexed, but the last scan didn't finish — Scan now to retry",
+                "short": "scan incomplete", "detail": why}
+    if last:
+        n = last["files_scanned"] or 0
+        return {"state": "ok", "text": f"Scanned {time_ago(last['finished_at'])} — {n:,} file(s)",
+                "short": f"scanned {time_ago(last['finished_at'])}", "detail": ""}
+    return {"state": "never", "text": "Not scanned yet", "short": "not scanned", "detail": ""}
+
+
+def scan_status_for(conn, roots) -> dict:
+    status = {}
+    for r in roots:
+        active = db.get_active_scan(conn, r["label"])
+        last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
+        status[r["label"]] = {
+            "active": active,
+            "last_finished": last_finished,
+            # A scan that crashed/was killed mid-way still committed real
+            # progress (scan_root commits periodically) -- surface that
+            # instead of falsely claiming "never scanned yet" once both
+            # of the above come back empty.
+            "abandoned": None if (active or last_finished) else db.get_abandoned_scan(conn, r["label"]),
+        }
+    return status
+
 
 def get_config(request: Request) -> AppConfig:
     return request.app.state.config
@@ -249,6 +333,40 @@ def api_status(request: Request):
     })
 
 
+@app.get("/api/ui-state")
+def api_ui_state(request: Request, counts: int = 1):
+    """What the page polls to stay live without reloading: each root's state,
+    and (unless `counts=0`) the attention counts. Roots are a few indexed
+    lookups plus an exists() each; the counts re-derive duplicates and sync
+    plans, so the page asks for them less often while a scan is running."""
+    config = get_config(request)
+    with get_conn(request) as conn:
+        roots = db.list_roots(conn)
+        status = scan_status_for(conn, roots)
+        payload = {
+            "server_time": time.time(),
+            "roots": [
+                {
+                    "label": r["label"],
+                    "scanned_at": status[r["label"]]["last_finished"]["finished_at"] if status[r["label"]]["last_finished"] else None,
+                    **describe_root(r, status[r["label"]], root_reachable(r["path"])),
+                }
+                for r in roots
+            ],
+            "any_scan_active": any(s["active"] for s in status.values()),
+        }
+        if counts:
+            sync_statuses = sync.sync_status_for_all(conn)
+            promote_count = sum(len(s["plan"].copy_to_a) for s in sync_statuses)
+            untracked = suggestions.untracked_media(conn, config.video_extensions)
+            payload["counts"] = attention_counts(
+                dedupe.find_duplicates(conn), sync_statuses, promote_count,
+                len([u for u in untracked if not u["already_in_library"]]),
+                len(db.list_quarantine(conn)), db.list_pending_pairings(conn),
+            )
+    return JSONResponse(payload)
+
+
 # --------------------------------------------------------------- single page
 
 @app.get("/")
@@ -256,19 +374,7 @@ def index(request: Request, msg: str | None = None):
     config = get_config(request)
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
-        scan_status = {}
-        for r in roots:
-            active = db.get_active_scan(conn, r["label"])
-            last_finished = None if active else db.get_last_finished_scan(conn, r["label"])
-            scan_status[r["label"]] = {
-                "active": active,
-                "last_finished": last_finished,
-                # A scan that crashed/was killed mid-way still committed real
-                # progress (scan_root commits periodically) -- surface that
-                # instead of falsely claiming "never scanned yet" once both
-                # of the above come back empty.
-                "abandoned": None if (active or last_finished) else db.get_abandoned_scan(conn, r["label"]),
-            }
+        scan_status = scan_status_for(conn, roots)
         any_scan_active = any(s["active"] for s in scan_status.values())
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
@@ -307,6 +413,7 @@ def index(request: Request, msg: str | None = None):
             library_roots.append({"root": r, "tree": tree, "video_count": tree.total_videos()})
 
     has_primary = any(r["role"] == "primary" and r["enabled"] for r in roots)
+    root_states = {r["label"]: describe_root(r, scan_status[r["label"]], root_reachable(r["path"])) for r in roots}
     trash_scan = recycle_bin.scan_trash(top_n=50)
     new_untracked = [u for u in untracked if not u["already_in_library"]]
 
@@ -322,11 +429,20 @@ def index(request: Request, msg: str | None = None):
         seen_ids.add(p.peer_id)
         discovered_peers.append(p)
 
+    attn_counts = attention_counts(
+        dup_groups, sync_statuses, len(promote_candidates), len(new_untracked), len(quarantine_items), pending_pairings
+    )
+    attn_counts["library"] = sum(lr["video_count"] for lr in library_roots)
+    attn_counts["roots"] = len(roots)
+
     return templates.TemplateResponse(
         request,
         "index.html",
         {
             "msg": msg,
+            "root_states": root_states,
+            "attn_counts": attn_counts,
+            "attention": ATTENTION,
             "machine": config.machine,
             "scan_interval": config.scan_interval_minutes,
             "roots": roots,
