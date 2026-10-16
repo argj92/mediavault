@@ -13,6 +13,7 @@ data is ever exchanged, exactly as with an mDNS-discovered peer.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 
@@ -21,8 +22,29 @@ import requests
 from .discovery import PeerInfo
 
 
+# Where the CLI lives when it isn't on PATH. A launchd/systemd service gets a
+# minimal PATH (no /opt/homebrew/bin), so `which tailscale` finds nothing there
+# even though it works in a terminal.
+_FALLBACK_PATHS = (
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/bin/tailscale",
+)
+
+
+def find_tailscale() -> str | None:
+    exe = shutil.which("tailscale")
+    if exe:
+        return exe
+    for path in _FALLBACK_PATHS:
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
 def is_available() -> bool:
-    return shutil.which("tailscale") is not None
+    return find_tailscale() is not None
 
 
 def list_tailnet_peers() -> list[dict]:
@@ -33,7 +55,7 @@ def list_tailnet_peers() -> list[dict]:
         return []
     try:
         result = subprocess.run(
-            ["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5
+            [find_tailscale(), "status", "--json"], capture_output=True, text=True, timeout=5
         )
     except (subprocess.TimeoutExpired, OSError):
         return []

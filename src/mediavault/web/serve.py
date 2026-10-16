@@ -13,10 +13,11 @@ startup, so a service definition doesn't hard-code an address that can change.
 from __future__ import annotations
 
 import logging
-import shutil
 import socket
 import subprocess
 import time
+
+from ..tailscale import find_tailscale
 
 log = logging.getLogger("mediavault.web")
 
@@ -24,7 +25,7 @@ log = logging.getLogger("mediavault.web")
 def tailscale_ip(wait_seconds: float = 0.0, interval: float = 2.0) -> str | None:
     """This machine's Tailscale IPv4, waiting up to `wait_seconds` for
     Tailscale to come up (a login-time service often starts first)."""
-    exe = shutil.which("tailscale")
+    exe = find_tailscale()
     if not exe:
         return None
     deadline = time.monotonic() + wait_seconds

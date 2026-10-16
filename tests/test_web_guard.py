@@ -36,13 +36,17 @@ def _ignored(config):
     "127.0.0.1:8420", "localhost:8420", "[::1]:8420", "100.72.77.6:8420", "192.168.1.5",
     "test-machine.local:8420", "mini.tailnet.ts.net:8420", "vault.example.lan",
     "Localhost.",          # case / trailing dot
+    "akashs-mac-mini.taildc3029.ts.net:8420",   # our MagicDNS name even when the CLI can't report it
 ])
 def test_legitimate_hosts_are_served(env, host):
     c, _ = env
     assert c.get("/api/status", headers={"host": host}).status_code == 200
 
 
-@pytest.mark.parametrize("host", ["evil.example", "evil.example:8420", "127.0.0.1.evil.example", "localhost.evil.example"])
+@pytest.mark.parametrize("host", [
+    "evil.example", "evil.example:8420", "127.0.0.1.evil.example", "localhost.evil.example",
+    "evilts.net", "mini.tailnet.ts.net.evil.example", "ts.net.evil.example",   # lookalikes of the Tailscale suffix
+])
 def test_unknown_hostnames_are_refused_dns_rebinding(env, host):
     c, _ = env
     r = c.get("/api/status", headers={"host": host})
@@ -99,3 +103,24 @@ def test_reads_are_not_subject_to_the_origin_check(env):
 ])
 def test_split_host_header(value, expected):
     assert guard.split_host_header(value) == expected
+
+
+def test_magicdns_name_is_allowed_even_when_the_tailscale_cli_cant_be_found(env, monkeypatch):
+    """Under launchd PATH has no /opt/homebrew/bin, so asking the CLI for our
+    name failed and the tailnet name was blocked. The .ts.net suffix covers it."""
+    c, _ = env
+    monkeypatch.setattr(guard, "tailscale_dns_name", lambda: None)
+    assert c.get("/api/status", headers={"host": "akashs-mac-mini.taildc3029.ts.net:8420"}).status_code == 200
+
+
+def test_find_tailscale_falls_back_when_path_is_minimal(monkeypatch, tmp_path):
+    from mediavault import tailscale
+
+    fake = tmp_path / "tailscale"
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(tailscale.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tailscale, "_FALLBACK_PATHS", ("/nonexistent/tailscale", str(fake)))
+    assert tailscale.find_tailscale() == str(fake) and tailscale.is_available()
+    monkeypatch.setattr(tailscale, "_FALLBACK_PATHS", ("/nonexistent/tailscale",))
+    assert tailscale.find_tailscale() is None and not tailscale.is_available()
