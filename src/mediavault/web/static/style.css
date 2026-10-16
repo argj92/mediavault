@@ -423,3 +423,12 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .quarantine-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; padding: 0.6rem 0.9rem; margin: 0 0 1rem; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; }
 .quarantine-bar > span { flex: 1 1 18rem; }
 .quarantine-bar button { padding: 0.3rem 0.65rem; font-size: 0.78rem; }
+
+/* network-drive recovery, shown only while a root is offline */
+.root-card:not(.offline) .offline-only { display: none; }
+.root-net { display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.82rem; }
+.root-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
+.root-hint input[name=mount_url] { flex: 1 1 14rem; min-width: 0; }
+.root-net-edit { font-size: 0.82rem; }
+.root-net-edit > summary { cursor: pointer; color: var(--subtle); }
+.root-net-edit[open] > summary { margin-bottom: 0.5rem; }

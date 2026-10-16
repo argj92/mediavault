@@ -23,6 +23,13 @@ RETRY_AFTER_FAILURE_SECONDS = 60
 RETRY_AFTER_SKIPPED_ROOT_SECONDS = 300
 
 
+def _reachable(path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
     """Rescans every enabled root, recomputes duplicate groups and each
     root's sync status against the primary, and looks for untracked inbox
@@ -31,8 +38,12 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
     for row in db.list_roots(conn, enabled_only=True):
         root = RootConfig.from_row(row)
         try:
-            from . import scanner
+            from . import reconnect, scanner
 
+            if not _reachable(root.path):
+                # A network share that dropped off: if the user saved where to
+                # re-mount it from, try (throttled) before giving up on this cycle.
+                reconnect.try_auto(conn, row)
             scanner.scan_root(conn, root, hash_algo=config.hash_algo)
         except OSError as exc:
             # A removable/backup/iCloud/network drive not being mounted right

@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS roots (
     role TEXT NOT NULL,
     mode TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
-    created_at REAL NOT NULL DEFAULT 0
+    created_at REAL NOT NULL DEFAULT 0,
+    mount_url TEXT  -- smb://... to re-mount a network share (see reconnect.py)
 );
 
 CREATE TABLE IF NOT EXISTS worker_state (
@@ -210,6 +211,9 @@ def init_db(conn: sqlite3.Connection) -> None:
     # Migration: sync_pairs (manual pairwise wiring) was replaced by a single
     # primary-root basis that every other root syncs against automatically.
     conn.execute("DROP TABLE IF EXISTS sync_pairs")
+    # Migration: roots.mount_url.
+    if "mount_url" not in {r[1] for r in conn.execute("PRAGMA table_info(roots)")}:
+        conn.execute("ALTER TABLE roots ADD COLUMN mount_url TEXT")
     # Migration: scans.error (a failed scan is recorded as failed, not left "running").
     if "error" not in {r[1] for r in conn.execute("PRAGMA table_info(scans)")}:
         conn.execute("ALTER TABLE scans ADD COLUMN error TEXT")
@@ -243,6 +247,14 @@ def update_root_role_mode(conn: sqlite3.Connection, label: str, role: str, mode:
     """Changes what a root MEANS (role/mode) without touching its path or
     losing its indexed files — unlike remove+re-add, which wipes the index."""
     conn.execute("UPDATE roots SET role=?, mode=? WHERE label=?", (role, mode, label))
+
+
+def set_root_mount_url(conn: sqlite3.Connection, label: str, url: str | None) -> None:
+    conn.execute("UPDATE roots SET mount_url=? WHERE label=?", (url or None, label))
+
+
+def set_root_path(conn: sqlite3.Connection, label: str, path: str) -> None:
+    conn.execute("UPDATE roots SET path=? WHERE label=?", (path, label))
 
 
 def remove_root(conn: sqlite3.Connection, label: str) -> None:
