@@ -406,6 +406,7 @@ def index(request: Request, msg: str | None = None):
         {
             "msg": msg,
             "root_states": root_states,
+            "offline_roots": {label for label, st in root_states.items() if st["state"] == "offline"},
             "attn_counts": attn_counts,
             "attention": ATTENTION,
             "machine": config.machine,

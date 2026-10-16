@@ -44,6 +44,33 @@ def test_keepers_are_one_per_designed_root_and_the_tidiest_path(conn, tmp_path):
     assert g["wasted_bytes"] == 2 * len(b"same bytes")
 
 
+def test_the_copy_whose_path_matches_the_other_drive_is_kept(conn, tmp_path):
+    """Primary has the file at the root and under Games/; the backup has it
+    under Games/. The Games/ copy lines up across drives, so the odd-one-out
+    at the root is the extra -- even though its path is shorter."""
+    primary = make_root(tmp_path, label="primary", role="primary", mode="mirror")
+    backup = make_root(tmp_path, label="backup", role="backup", mode="mirror")
+    write_file(primary.path, "Clip.mp4", b"clip bytes")
+    write_file(primary.path, "Games/Clip.mp4", b"clip bytes")
+    write_file(backup.path, "Games/Clip.mp4", b"clip bytes")
+    scanner.scan_root(conn, primary, hash_algo="sha256")
+    scanner.scan_root(conn, backup, hash_algo="sha256")
+
+    (g,) = dedupe.find_duplicates(conn)
+
+    assert {(f["root_label"], f["rel_path"]) for f in g["keepers"]} == {("primary", "Games/Clip.mp4"), ("backup", "Games/Clip.mp4")}
+    assert [(f["root_label"], f["rel_path"]) for f in g["extras"]] == [("primary", "Clip.mp4")]
+
+
+def test_without_any_matching_paths_the_shortest_path_still_wins(conn, tmp_path):
+    root = make_root(tmp_path, label="lib", role="primary", mode="mirror")
+    write_file(root.path, "A.mkv", b"same")
+    write_file(root.path, "Deeper/Folder/A copy.mkv", b"same")
+    scanner.scan_root(conn, root, hash_algo="sha256")
+    (g,) = dedupe.find_duplicates(conn)
+    assert [f["rel_path"] for f in g["keepers"]] == ["A.mkv"]
+
+
 def test_content_outside_every_designed_root_keeps_one_copy_overall(conn, tmp_path):
     a = make_root(tmp_path, label="a", role="inbox", mode="watch")
     b = make_root(tmp_path, label="b", role="inbox", mode="watch")
@@ -194,3 +221,23 @@ def test_bulk_route_requires_confirmation_and_reports(client, tmp_path):
     assert r.status_code == 303
     assert "Quarantined 2 extra copies across 1 group(s)" in _flash(r)
     assert not (inbox.path / "Stray.mkv").exists()
+
+
+def test_copies_on_an_offline_drive_cant_be_quarantined_from_the_page(client, tmp_path):
+    """The click used to fail with a message the user never saw; say so up front."""
+    c, config = client
+    with db.connect(config.db_path) as conn:
+        primary, backup, inbox = _setup(conn, tmp_path)
+    shutil.rmtree(backup.path)
+
+    page = c.get("/").text
+
+    assert "isn't reachable right now" in page and 'class="pill warn">offline' in page
+    # only the offline drive's button is disabled
+    assert page.count("Quarantine</button>") == 4 and page.count('disabled title="backup') == 1
+
+
+def test_flash_message_is_dismissible_and_rendered_by_the_shell(client):
+    c, _ = client
+    page = c.get("/?msg=Quarantined%20it").text
+    assert 'class="flash"' in page and "Quarantined it" in page and "flash-close" in page

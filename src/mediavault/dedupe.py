@@ -45,11 +45,15 @@ def _is_expected_backup_redundancy(files, expected_labels: set[str]) -> bool:
     return set(root_labels) <= expected_labels
 
 
-def _best_copy(files):
-    """The copy worth keeping among equals: shortest path (the tidiest
+def _best_copy(files, path_counts: dict[str, int] | None = None):
+    """The copy worth keeping among equals. First choice: a path that matches
+    where the same content sits in other places (a mirror is only tidy when
+    both drives use the same path -- keep the copy that already lines up and
+    the odd one out is the extra). Then the shortest path (the tidiest
     location -- "Movies/X.mkv" over "Movies/Other Movie/X copy.mkv"), then
     alphabetical so the choice is deterministic."""
-    return min(files, key=lambda f: (len(f["rel_path"]), f["rel_path"], f["root_label"]))
+    counts = path_counts or {}
+    return min(files, key=lambda f: (-counts.get(f["rel_path"], 0), len(f["rel_path"]), f["rel_path"], f["root_label"]))
 
 
 def split_keepers_extras(files, expected_labels: set[str]) -> tuple[list, list]:
@@ -58,12 +62,16 @@ def split_keepers_extras(files, expected_labels: set[str]) -> tuple[list, list]:
     redundancy -- see _expected_mirror_labels); everything else is an extra:
     a second copy within the same root, or a copy outside the designed backup
     set. If the content isn't in any designed root at all, keep one copy
-    overall."""
+    overall. Within a root, the copy whose path matches the same file on
+    another drive wins (see _best_copy)."""
+    path_counts: dict[str, int] = {}
+    for f in files:
+        path_counts[f["rel_path"]] = path_counts.get(f["rel_path"], 0) + 1
     by_root: dict[str, list] = {}
     for f in files:
         by_root.setdefault(f["root_label"], []).append(f)
     designed = [label for label in by_root if label in expected_labels]
-    keepers = [_best_copy(by_root[label]) for label in designed] or [_best_copy(files)]
+    keepers = [_best_copy(by_root[label], path_counts) for label in designed] or [_best_copy(files, path_counts)]
     keep_ids = {k["id"] for k in keepers}
     return keepers, [f for f in files if f["id"] not in keep_ids]
 

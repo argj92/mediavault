@@ -187,15 +187,28 @@ h3 { margin-top: 1.4rem; color: var(--bright); font-size: 0.95rem; font-weight: 
 
 .subtle { color: var(--subtle); font-size: 0.88rem; line-height: 1.5; }
 
+/* Sticky: redirects land on a section anchor, scrolled past the top of the
+   page, and a message sitting above the fold was never seen. */
 .flash {
-  background: var(--accent-dim);
+  position: sticky;
+  top: 0.75rem;
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  background: #0d1b3a;
   border: 1px solid var(--border-bright);
-  color: var(--text);
-  padding: 0.6rem 0.9rem;
+  box-shadow: 0 8px 24px -10px #000;
+  color: var(--bright);
+  padding: 0.7rem 0.9rem;
   border-radius: 8px;
   margin-bottom: 1.5rem;
   font-size: 0.9rem;
+  line-height: 1.45;
 }
+.flash > span { flex: 1; }
+.flash-close { background: none; border: none; color: var(--subtle); font-size: 1.2rem; line-height: 1; padding: 0 0.2rem; box-shadow: none; }
+.flash-close:hover { color: var(--bright); box-shadow: none; }
 .flash.warn-flash {
   background: rgba(224, 167, 47, 0.08);
   border-color: rgba(224, 167, 47, 0.4);
@@ -352,21 +365,59 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .dup-bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 .dup-bar[aria-pressed="true"] .dup-bar-fill { background: var(--accent-bright); }
 .dup-bar-count { text-align: right; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
+/* two-handle range over the size buckets */
+.dup-range { position: relative; height: 1.6rem; margin: 0.4rem 0.5rem 0; }
+.dup-range input[type=range] {
+  position: absolute; left: 0; top: 0; width: 100%; height: 1.6rem; margin: 0; padding: 0;
+  background: none; border: none; pointer-events: none; -webkit-appearance: none; appearance: none;
+}
+.dup-range input[type=range]::-webkit-slider-runnable-track { height: 4px; background: var(--border-bright); border-radius: 2px; }
+.dup-range input[type=range]::-moz-range-track { height: 4px; background: var(--border-bright); border-radius: 2px; }
+.dup-range input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; pointer-events: auto; cursor: grab;
+  width: 18px; height: 18px; margin-top: -7px; border-radius: 50%;
+  background: var(--accent-bright); border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--accent);
+}
+.dup-range input[type=range]::-moz-range-thumb {
+  pointer-events: auto; cursor: grab; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent-bright); border: 2px solid var(--bg);
+}
+.dup-range-label { margin: 0.1rem 0.5rem 0.7rem; }
 .linklike { background: none; border: none; padding: 0; color: var(--accent-bright); font-size: 0.8rem; text-decoration: underline; cursor: pointer; }
 .linklike:hover { box-shadow: none; }
 
-.dup-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.6rem; margin-bottom: 0.8rem; }
-.dup-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.dup-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem 1rem; margin: 1.25rem 0 1rem; padding-top: 1.1rem; border-top: 1px solid var(--border); }
+.dup-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.dup-bulk-hint { flex-basis: 100%; margin: 0; }
 
-.dup-group { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 0.5rem; }
+.dup-group { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 0.9rem; }
+.dup-group[open] { border-color: var(--border-bright); }
 .dup-group[hidden] { display: none; }
-.dup-group > summary { cursor: pointer; padding: 0.6rem 1rem; display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; align-items: baseline; list-style: none; }
+.dup-group > summary { cursor: pointer; padding: 1rem 1.25rem; display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; list-style: none; }
 .dup-group > summary::-webkit-details-marker { display: none; }
 .dup-group > summary::before { content: "▸"; color: var(--accent-bright); }
 .dup-group[open] > summary::before { content: "▾"; }
-.dup-name { color: var(--bright); font-weight: 600; overflow-wrap: anywhere; }
-.dup-body { padding: 0 1rem 0.9rem; }
-.dup-group-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; }
+.dup-name { color: var(--bright); font-weight: 600; font-size: 0.95rem; line-height: 1.4; overflow-wrap: anywhere; flex: 1 1 18rem; }
+.dup-meta { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.dup-chip { font-size: 0.74rem; color: var(--subtle); border: 1px solid var(--border); border-radius: 999px; padding: 0.15rem 0.6rem; white-space: nowrap; }
+.dup-chip.warn { color: var(--warn); border-color: rgba(224, 167, 47, 0.35); }
+.dup-body { padding: 0.25rem 1.25rem 1.25rem; }
+
+/* one row per copy: verdict | where it lives | size | action */
+.dup-copies { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.dup-copy { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) 6rem auto; align-items: center; gap: 0.5rem 1rem; padding: 0.95rem 0.25rem; border-bottom: 1px solid var(--border); }
+.dup-copy.is-extra { background: rgba(224, 167, 47, 0.04); }
+.dup-where { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.dup-root { color: var(--bright); font-size: 0.88rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem; }
+.dup-path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; color: var(--subtle); line-height: 1.45; overflow-wrap: anywhere; }
+.dup-size { text-align: right; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.dup-copy button { white-space: nowrap; }
+.dup-group-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-top: 1.1rem; }
+@media (max-width: 640px) {
+  .dup-copy { grid-template-columns: auto minmax(0, 1fr); }
+  .dup-size { text-align: left; grid-column: 2; }
+  .dup-copy form { grid-column: 2; }
+}
 
 /* quarantine summary + purge, shown atop Duplicates and the Recycle Bin */
 .quarantine-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; padding: 0.6rem 0.9rem; margin: 0 0 1rem; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 8px; font-size: 0.85rem; }
