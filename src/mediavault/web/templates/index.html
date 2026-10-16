@@ -403,6 +403,11 @@
         <span class="subtle">Groups by file size (log scale) — click one or more ranges to filter</span>
         <button type="button" id="dup-clear" class="linklike" hidden>Clear filter</button>
       </div>
+      <div class="dup-range">
+        <input type="range" id="dup-lo" min="0" max="{{ dup_histogram|length - 1 }}" value="0" aria-label="Smallest file size to show">
+        <input type="range" id="dup-hi" min="0" max="{{ dup_histogram|length - 1 }}" value="{{ dup_histogram|length - 1 }}" aria-label="Largest file size to show">
+      </div>
+      <div class="dup-range-label subtle" id="dup-range-label"></div>
       {% for b in dup_histogram %}
       <button type="button" class="dup-bar{{ ' empty' if not b.groups else '' }}" data-bucket="{{ b.index }}" aria-pressed="false"{{ ' disabled' if not b.groups else '' }}
               title="{{ b.groups }} group(s), {{ b.wasted_bytes|human_bytes }} reclaimable">
@@ -420,11 +425,11 @@
         <button type="button" id="dup-collapse">Collapse all</button>
         <form method="post" action="/duplicates/quarantine-bulk" class="dup-bulk-form" data-mode="extras">
           <input type="hidden" name="mode" value="extras"><input type="hidden" name="confirm" value="yes">
-          <button class="danger" id="dup-bulk-extras" disabled>Keep one copy of each shown group, quarantine the rest</button>
+          <button class="danger" id="dup-bulk-extras" disabled>Quarantine extras</button>
         </form>
         <form method="post" action="/duplicates/quarantine-bulk" class="dup-bulk-form" data-mode="all">
           <input type="hidden" name="mode" value="all"><input type="hidden" name="confirm" value="yes">
-          <button class="danger" id="dup-bulk-all" disabled>Quarantine all copies of shown groups</button>
+          <button class="danger" id="dup-bulk-all" disabled>Quarantine every copy</button>
         </form>
       </span>
     </div>
@@ -434,27 +439,31 @@
     <details class="dup-group" data-hash="{{ g.hash }}" data-bucket="{{ g.bucket }}" data-copies="{{ g.count }}" data-extras="{{ g.extras|length }}" data-each="{{ g.each_size }}" data-wasted="{{ g.wasted_bytes }}">
       <summary>
         <span class="dup-name">{{ g.keepers[0].rel_path.split('/')[-1] }}</span>
-        <span class="subtle">{{ g.count }} copies &middot; {{ g.each_size|human_bytes }} each &middot; {{ g.wasted_bytes|human_bytes }} reclaimable</span>
+        <span class="dup-meta">
+          <span class="dup-chip">{{ g.count }} copies</span>
+          <span class="dup-chip">{{ g.each_size|human_bytes }} each</span>
+          <span class="dup-chip warn">{{ g.wasted_bytes|human_bytes }} to reclaim</span>
+        </span>
       </summary>
       <div class="dup-body">
-        <table>
-          <tr><th></th><th>Root</th><th>Path</th><th>Size</th><th></th></tr>
+        <div class="dup-copies">
           {% for f in g.files %}
-          <tr>
-            <td>{% if f.id in keep_ids %}<span class="pill ok">keep</span>{% else %}<span class="pill warn">extra</span>{% endif %}</td>
-            <td>{{ f.root_label }}</td>
-            <td class="path">{{ f.rel_path }}</td>
-            <td>{{ f.size|human_bytes }}</td>
-            <td>
-              <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
-                <input type="hidden" name="root_label" value="{{ f.root_label }}">
-                <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
-                <button class="danger">Quarantine this copy</button>
-              </form>
-            </td>
-          </tr>
+          {% set offline = f.root_label in offline_roots %}
+          <div class="dup-copy{{ ' is-extra' if f.id not in keep_ids else '' }}">
+            <span class="dup-verdict">{% if f.id in keep_ids %}<span class="pill ok">keep</span>{% else %}<span class="pill warn">extra</span>{% endif %}</span>
+            <span class="dup-where">
+              <span class="dup-root">{{ f.root_label }}{% if offline %} <span class="pill warn">offline</span>{% endif %}</span>
+              <span class="dup-path">{{ f.rel_path }}</span>
+            </span>
+            <span class="dup-size">{{ f.size|human_bytes }}</span>
+            <form method="post" action="/duplicates/quarantine" onsubmit="return confirm('Move this copy to quarantine?');">
+              <input type="hidden" name="root_label" value="{{ f.root_label }}">
+              <input type="hidden" name="rel_path" value="{{ f.rel_path }}">
+              <button class="danger"{% if offline %} disabled title="{{ f.root_label }} isn't reachable right now — reconnect it to remove this copy"{% endif %}>Quarantine</button>
+            </form>
+          </div>
           {% endfor %}
-        </table>
+        </div>
         <div class="dup-group-actions">
           {% if g.extras %}
           <form method="post" action="/duplicates/quarantine-bulk" onsubmit="return confirm('Keep the copies marked keep and quarantine the {{ g.extras|length }} extra one(s)?');">
@@ -494,6 +503,11 @@
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
   }
+  const lo = document.getElementById('dup-lo');
+  const hi = document.getElementById('dup-hi');
+  const rangeLabel = document.getElementById('dup-range-label');
+  const maxIdx = +hi.max;
+  const labels = bars.map(b => b.querySelector('.dup-bar-label').textContent);
   const isShown = g => selected.size === 0 || selected.has(g.dataset.bucket);
 
   function totals() {
@@ -511,13 +525,20 @@
 
   function refresh() {
     const t = totals();
+    // keep the slider in step with whatever the bars selected
+    const picked = Array.from(selected, Number);
+    lo.value = picked.length ? Math.min(...picked) : 0;
+    hi.value = picked.length ? Math.max(...picked) : maxIdx;
+    rangeLabel.textContent = (+lo.value === 0 && +hi.value === maxIdx)
+      ? 'Any size — drag the handles or click bars to narrow'
+      : 'Sizes from ' + labels[+lo.value] + ' up to ' + labels[+hi.value];
     bars.forEach(b => b.setAttribute('aria-pressed', selected.has(b.dataset.bucket) ? 'true' : 'false'));
     clearBtn.hidden = selected.size === 0;
     showing.textContent = 'Showing ' + t.shown + ' of ' + groups.length + ' group(s) · ' + fmt(t.wasted) + ' reclaimable';
     bulkExtras.disabled = t.extras === 0;
     bulkAll.disabled = t.shown === 0;
-    bulkExtras.textContent = 'Keep one copy of each shown group, quarantine the ' + t.extras + ' extra(s)';
-    bulkAll.textContent = 'Quarantine all ' + t.copies + ' copies of shown groups';
+    bulkExtras.textContent = 'Quarantine ' + t.extras + ' extra cop' + (t.extras === 1 ? 'y' : 'ies');
+    bulkAll.textContent = 'Quarantine all ' + t.copies + ' copies';
   }
 
   bars.forEach(b => b.addEventListener('click', () => {
@@ -525,6 +546,16 @@
     selected.has(k) ? selected.delete(k) : selected.add(k);
     refresh();
   }));
+  function fromSlider(moved) {
+    if (+lo.value > +hi.value) { moved === lo ? (hi.value = lo.value) : (lo.value = hi.value); }
+    selected.clear();
+    if (!(+lo.value === 0 && +hi.value === maxIdx)) {
+      for (let i = +lo.value; i <= +hi.value; i++) selected.add(String(i));
+    }
+    refresh();
+  }
+  lo.addEventListener('input', () => fromSlider(lo));
+  hi.addEventListener('input', () => fromSlider(hi));
   clearBtn.addEventListener('click', () => { selected.clear(); refresh(); });
   document.getElementById('dup-expand').addEventListener('click', () => groups.forEach(g => { if (!g.hidden) g.open = true; }));
   document.getElementById('dup-collapse').addEventListener('click', () => groups.forEach(g => { g.open = false; }));

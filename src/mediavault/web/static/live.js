@@ -6,6 +6,13 @@
 (function () {
   'use strict';
 
+  // ---- a flash message arrives as ?msg=...; keep it out of the address bar so a
+  // refresh or a shared link doesn't replay it
+  if (location.search.indexOf('msg=') !== -1) {
+    var q = new URLSearchParams(location.search); q.delete('msg');
+    history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : '') + location.hash);
+  }
+
   // ---- remembered section state (best-effort: storage can be unavailable)
   var KEY = 'mv.sections';
   function loadState() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }

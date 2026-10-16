@@ -30,7 +30,7 @@
       </div>
     </aside>
     <main>
-      {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+      {% if msg %}<div class="flash" role="status"><span>{{ msg }}</span><button type="button" class="flash-close" aria-label="Dismiss" onclick="this.parentElement.remove()">&times;</button></div>{% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>
