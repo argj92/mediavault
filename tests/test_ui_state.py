@@ -120,7 +120,7 @@ def test_page_has_sidebar_status_strip_and_no_meta_refresh(client, tmp_path):
     page = c.get("/").text
 
     assert 'http-equiv="refresh"' not in page                       # replaced by the polling fetch
-    assert '<script src="/static/live.js"' in page
+    assert '<script src="/static/live.js?v=' in page
     assert 'href="/#duplicates"' in page and 'data-count="duplicates"' in page
     assert 'data-root-chip="backup"' in page and 'class="chip offline"' in page
     assert 'class="root-card offline" data-root="backup"' in page
@@ -141,3 +141,11 @@ def test_static_assets_are_served(client):
     c, _ = client
     assert c.get("/static/live.js").status_code == 200
     assert "ui-state" in c.get("/static/live.js").text
+
+
+def test_static_assets_are_versioned_so_updates_beat_the_browser_cache(client):
+    c, _ = client
+    page = c.get("/").text
+    assert 'href="/static/style.css?v=' in page and 'src="/static/live.js?v=' in page
+    assert web_app.static_url("style.css") != "/static/style.css?v=0"      # real mtime, not the fallback
+    assert c.get(web_app.static_url("style.css")).status_code == 200       # the query string doesn't break serving

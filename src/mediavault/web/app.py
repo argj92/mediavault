@@ -88,6 +88,19 @@ def time_ago(unix_ts) -> str:
     return f"{int(seconds // 86400)}d ago"
 
 
+def static_url(name: str) -> str:
+    """/static/<name> with its mtime as a version, so a browser that cached an
+    old stylesheet/script (the server sends no Cache-Control, so browsers
+    reuse them heuristically) fetches the new one after an update instead of
+    rendering new markup with old CSS."""
+    try:
+        version = int((BASE_DIR / "static" / name).stat().st_mtime)
+    except OSError:
+        version = 0
+    return f"/static/{name}?v={version}"
+
+
+templates.env.globals["static_url"] = static_url
 templates.env.filters["human_bytes"] = human_bytes
 templates.env.filters["time_ago"] = time_ago
 
