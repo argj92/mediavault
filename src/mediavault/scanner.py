@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import cloud, db
 from .config import RootConfig
-from .hashing import hash_file, quick_signature
+from .hashing import hash_file, quick_signature, resolve_algo
 
 
 def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blake3") -> dict:
@@ -25,6 +25,11 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
     # front so they never show up as sync conflicts/promotions/"gone" files.
     db.purge_junk_rows(conn, root.label)
 
+    # The algorithm that will actually be used (blake3 falls back to sha256
+    # when the package isn't installed). Hashes carry their algorithm as a
+    # prefix, and only same-algorithm hashes can be compared, so a cached hash
+    # from a different algorithm must not be reused -- see below.
+    algo = resolve_algo(hash_algo)
     scan_started_at = time.time()
     scan_id = db.start_scan(conn, root.label)
 
@@ -65,12 +70,19 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
             size, mtime = quick_signature(full_path)
             existing = db.get_file(conn, root.label, entry.rel_path)
 
-            if existing is not None and existing["size"] == size and existing["mtime"] == mtime and existing["hash"]:
+            if (
+                existing is not None and existing["size"] == size and existing["mtime"] == mtime
+                and existing["hash"] and existing["hash"].startswith(f"{algo}:")
+            ):
                 # Unchanged since last scan — reuse the cached hash, skip re-reading the file.
+                # (Only if it was made with the algorithm in use now: otherwise the same
+                # content would carry different hashes on different files, and duplicate
+                # and sync matching would silently miss them. Changing hash_algo, or
+                # installing blake3 while set to it, re-hashes everything once instead.)
                 db.upsert_file(conn, root.label, entry.rel_path, size, mtime, existing["hash"], is_placeholder=False)
                 continue
 
-            file_hash = hash_file(full_path, algo=hash_algo)
+            file_hash = hash_file(full_path, algo=algo)
             if existing is None:
                 stats["new_files"] += 1
             else:
