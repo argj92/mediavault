@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
         lambda top_n=50: {"items": [], "total_bytes": 0, "accurate": True, "access_errors": []},
     )
     # No `with TestClient(...)`: that would start the real background scanner.
-    return TestClient(web_app.app), config
+    return TestClient(web_app.app, base_url="http://127.0.0.1:8420"), config
 
 
 def _seed_duplicate_in_one_root(tmp_path, config, label="lib"):

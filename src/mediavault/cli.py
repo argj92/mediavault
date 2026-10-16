@@ -517,11 +517,16 @@ def peers_list():
 @peers_app.command("discover")
 def peers_discover(seconds: int = typer.Option(5, help="how long to listen for mDNS announcements")):
     """One-shot: listen for other mediavault instances on the same LAN."""
-    from zeroconf import Zeroconf
-
-    from .discovery import Browser
+    from . import discovery
+    from .discovery import Browser, Zeroconf
 
     config = _load()
+    try:
+        peers_module.require_lan_enabled(config)
+        discovery.require_zeroconf()
+    except (peers_module.PairingError, discovery.ZeroconfMissing) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     with db.connect(config.db_path) as conn:
         own_peer_id = db.get_or_create_peer_id(conn)
 
@@ -549,6 +554,11 @@ def peers_discover_tailscale():
     from . import tailscale
 
     config = _load()
+    try:
+        peers_module.require_lan_enabled(config)
+    except peers_module.PairingError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     if not tailscale.is_available():
         console.print("[red]The `tailscale` CLI isn't installed on this machine.[/red]")
         raise typer.Exit(1)

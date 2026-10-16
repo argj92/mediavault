@@ -30,7 +30,7 @@ def client(tmp_path):
     web_app.configure(config)
     # No `with TestClient(...)`: that would run the lifespan and start the
     # real background scanner. The route doesn't need it.
-    return TestClient(web_app.app), config
+    return TestClient(web_app.app, base_url="http://127.0.0.1:8420"), config
 
 
 def test_never_scanned_root_reports_null_last_scan(client):

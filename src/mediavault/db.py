@@ -6,6 +6,7 @@ own index by scanning its own roots.
 """
 from __future__ import annotations
 
+import hmac
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -372,14 +373,18 @@ def upsert_pairing_peer(
         )
 
 
-def finalize_pairing(conn: sqlite3.Connection, peer_id: str, outgoing_token: str) -> None:
+def finalize_pairing(conn: sqlite3.Connection, peer_id: str, outgoing_token: str) -> bool:
     """Called when the peer we're pairing with confirms and sends back the
     token *they* generated -- that's what completes pairing on the
-    initiator's side: it's the token we must present when calling *them*."""
-    conn.execute(
-        "UPDATE known_peers SET paired=1, outgoing_token=?, paired_at=? WHERE peer_id=?",
+    initiator's side: it's the token we must present when calling *them*.
+
+    One conditional UPDATE (`paired=0`), so two racing confirms can't both
+    win: returns False if no in-progress pairing was there to finalize."""
+    cur = conn.execute(
+        "UPDATE known_peers SET paired=1, outgoing_token=?, paired_at=? WHERE peer_id=? AND paired=0",
         (outgoing_token, time.time(), peer_id),
     )
+    return cur.rowcount == 1
 
 
 def complete_pairing_as_acceptor(
@@ -412,9 +417,14 @@ def get_known_peer(conn: sqlite3.Connection, peer_id: str) -> sqlite3.Row | None
 
 
 def find_peer_by_incoming_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM known_peers WHERE incoming_token=? AND paired=1", (token,)
-    ).fetchone()
+    """Constant-time match against every paired peer (there are a handful):
+    a SQL `WHERE incoming_token=?` compares with early exit, which leaks how
+    much of a guessed token was right."""
+    found = None
+    for row in conn.execute("SELECT * FROM known_peers WHERE paired=1 AND incoming_token IS NOT NULL"):
+        if hmac.compare_digest(row["incoming_token"].encode(), token.encode()):
+            found = row
+    return found
 
 
 def remove_known_peer(conn: sqlite3.Connection, peer_id: str) -> None:
@@ -437,6 +447,14 @@ def add_pending_pairing(
                code=excluded.code, outgoing_token=excluded.outgoing_token, requested_at=excluded.requested_at""",
         (peer_id, machine_name, address, port, code, outgoing_token, time.time()),
     )
+
+
+def purge_stale_pairings(conn: sqlite3.Connection, ttl_seconds: float) -> None:
+    """Drops incoming requests nobody answered, and initiated pairings the
+    other side never confirmed, once they're `ttl_seconds` old."""
+    cutoff = time.time() - ttl_seconds
+    conn.execute("DELETE FROM pending_pairings WHERE requested_at < ?", (cutoff,))
+    conn.execute("DELETE FROM known_peers WHERE paired=0 AND COALESCE(last_seen, first_seen) < ?", (cutoff,))
 
 
 def list_pending_pairings(conn: sqlite3.Connection) -> list[sqlite3.Row]:
