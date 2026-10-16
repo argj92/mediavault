@@ -167,7 +167,12 @@ def describe_root(root, status: dict, reachable: bool) -> dict:
                 "short": "scan incomplete", "detail": why}
     if last:
         n = last["files_scanned"] or 0
-        return {"state": "ok", "text": f"Scanned {time_ago(last['finished_at'])} — {n:,} file(s)",
+        try:
+            away = last["placeholders"] or 0
+        except (KeyError, IndexError):
+            away = 0
+        extra = f", {away:,} in the cloud only (not downloaded, so not hashed)" if away else ""
+        return {"state": "ok", "text": f"Scanned {time_ago(last['finished_at'])} — {n:,} file(s){extra}",
                 "short": f"scanned {time_ago(last['finished_at'])}", "detail": ""}
     return {"state": "never", "text": "Not scanned yet", "short": "not scanned", "detail": ""}
 
