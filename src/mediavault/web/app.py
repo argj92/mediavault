@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, reconnect, recycle_bin, scheduler, suggestions, sync
+from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, reconnect, recycle_bin, schedule, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 from ..lan import LanDiscovery
 from .guard import RequestGuard
@@ -100,9 +100,24 @@ def static_url(name: str) -> str:
     return f"/static/{name}?v={version}"
 
 
+def time_until(unix_ts) -> str:
+    if unix_ts is None:
+        return "not scheduled"
+    seconds = unix_ts - time.time()
+    if seconds <= 30:
+        return "any moment"
+    if seconds < 3600:
+        return f"in {round(seconds / 60)} min"
+    if seconds < 86400:
+        return f"in {seconds / 3600:.1f} h".replace(".0 h", " h")
+    return f"in {round(seconds / 86400)} d"
+
+
 templates.env.globals["static_url"] = static_url
 templates.env.filters["human_bytes"] = human_bytes
 templates.env.filters["time_ago"] = time_ago
+templates.env.filters["time_until"] = time_until
+templates.env.filters["duration"] = lambda sec: "—" if sec is None else schedule.human_duration(sec)
 
 # Sidebar: (group, [(section id, label)]). Section ids match the <details id>
 # blocks in index.html.
@@ -324,6 +339,7 @@ def api_ui_state(request: Request, counts: int = 1):
                 for r in roots
             ],
             "any_scan_active": any(s["active"] for s in status.values()),
+            "schedule": schedule.snapshot(conn, config),
         }
         if counts:
             sync_statuses = sync.sync_status_for_all(conn)
@@ -345,6 +361,7 @@ def index(request: Request, msg: str | None = None):
     with get_conn(request) as conn:
         roots = db.list_roots(conn)
         scan_status = scan_status_for(conn, roots)
+        sched = schedule.snapshot(conn, config)
         any_scan_active = any(s["active"] for s in scan_status.values())
         total_files = sum(1 for _ in db.all_files(conn))
         total_bytes = sum((f["size"] or 0) for f in db.all_files(conn) if not f["is_placeholder"])
@@ -420,6 +437,7 @@ def index(request: Request, msg: str | None = None):
             "attention": ATTENTION,
             "machine": config.machine,
             "scan_interval": config.scan_interval_minutes,
+            "sched": sched,
             "roots": roots,
             "scan_status": scan_status,
             "any_scan_active": any_scan_active,
@@ -605,9 +623,60 @@ def roots_toggle(request: Request, label: str):
     return flash_redirect("#roots", f"Toggled '{label}'.")
 
 
+def _worker(request: Request):
+    return getattr(request.app.state, "worker", None)
+
+
+@app.post("/schedule/run")
+def schedule_run(request: Request):
+    """"Scan all now": queue a full scan on the background worker and return
+    at once -- the page shows progress as it runs."""
+    worker = _worker(request)
+    if worker is None:
+        return flash_redirect("#roots", "Background scanning isn't running in this process.")
+    if not worker.request_run(None):
+        return flash_redirect("#roots", "A scan is already running — it will show up below when it finishes.")
+    return flash_redirect("#roots", "Scan started. Progress shows on each root below.")
+
+
+@app.post("/schedule/interval")
+def schedule_interval(request: Request, minutes: int = Form(...)):
+    config = get_config(request)
+    with get_conn(request) as conn:
+        try:
+            minutes = schedule.set_interval_minutes(conn, minutes)
+        except ValueError as exc:
+            return flash_redirect("", str(exc))
+        advice = schedule.advise(minutes, schedule.scan_estimates(conn))
+    worker = _worker(request)
+    if worker is not None:
+        worker.reschedule()
+    msg = f"Scans will run every {schedule.label_for(minutes)}."
+    if advice["level"] != "ok" and advice["message"]:
+        msg += " " + advice["message"]
+    return flash_redirect("", msg)
+
+
+@app.get("/api/schedule/advice")
+def schedule_advice(request: Request, minutes: int):
+    """What the UI shows under the frequency picker *before* it is saved."""
+    with get_conn(request) as conn:
+        return JSONResponse(schedule.advise(minutes, schedule.scan_estimates(conn)))
+
+
 @app.post("/roots/{label}/scan")
 def roots_scan(request: Request, label: str):
     config = get_config(request)
+    worker = _worker(request)
+    if worker is not None:
+        # Background, like "Scan all now": the request used to sit there hashing
+        # for as long as the drive took, and could double up with a scheduled scan.
+        with get_conn(request) as conn:
+            if db.get_root(conn, label) is None:
+                return flash_redirect("#roots", f"No such root '{label}'.")
+        if not worker.request_run([label]):
+            return flash_redirect("#roots", "A scan is already running — try again when it finishes.")
+        return flash_redirect("#roots", f"Scanning '{label}' in the background.")
     with get_conn(request) as conn:
         row = db.get_root(conn, label)
         if row is None:

@@ -3,8 +3,39 @@
 {% block content %}
 <header class="page-head">
   <h1>{{ machine }}</h1>
-  <p class="subtle">Rescans every {{ scan_interval }} min in the background. Index and config for this machine only — nothing here is shared via git.</p>
+  <p class="subtle">Index and config for this machine only — nothing here is shared via git.</p>
 </header>
+
+<section class="schedule" id="schedule" aria-label="Scan schedule">
+  <div class="sched-times">
+    <div class="sched-item">
+      <span class="sched-k">Last scan</span>
+      <span class="sched-v" id="sched-last" data-ts="{{ sched.last_finished_at or '' }}">
+        {% if sched.running %}running now…{% elif sched.last_finished_at %}{{ sched.last_finished_at|time_ago }}{% else %}not yet{% endif %}
+      </span>
+      <span class="sched-sub" id="sched-last-sub">{% if sched.last_duration is not none and not sched.running %}took {{ sched.last_duration|duration }}{% endif %}</span>
+    </div>
+    <div class="sched-item">
+      <span class="sched-k">Next scan</span>
+      <span class="sched-v" id="sched-next" data-ts="{{ sched.next_run_at or '' }}">{% if sched.running %}after this one{% else %}{{ sched.next_run_at|time_until }}{% endif %}</span>
+      <span class="sched-sub" id="sched-next-sub">{% if sched.next_reason == 'retry' %}retrying early — a drive was unreachable{% endif %}</span>
+    </div>
+  </div>
+  <div class="sched-controls">
+    <form method="post" action="/schedule/run"><button id="sched-run"{% if sched.running %} disabled{% endif %}>Scan all now</button></form>
+    <form method="post" action="/schedule/interval" class="sched-form" id="sched-form">
+      <label>Scan every
+        <select name="minutes" id="sched-minutes" aria-label="How often to scan">
+          {% set known = sched.presets|map(attribute='minutes')|list %}
+          {% if sched.interval_minutes not in known %}<option value="{{ sched.interval_minutes }}" selected>{{ sched.interval_label }}</option>{% endif %}
+          {% for p in sched.presets %}<option value="{{ p.minutes }}"{{ ' selected' if p.minutes == sched.interval_minutes else '' }}>{{ p.label }}</option>{% endfor %}
+        </select>
+      </label>
+      <button id="sched-save" disabled>Save</button>
+    </form>
+  </div>
+  <p class="sched-advice{{ ' ' ~ sched.advice.level if sched.advice.message else '' }}" id="sched-advice" data-saved="{{ sched.interval_minutes }}"{% if not sched.advice.message %} hidden{% endif %}>{{ sched.advice.message }}</p>
+</section>
 
 <div class="statusbar" id="statusbar" aria-label="Status">
   {% for r in roots %}

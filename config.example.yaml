@@ -24,7 +24,9 @@ video_extensions: [".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts"]
 # sync status, and fires notifications when something changes. Runs while
 # `mediavault web` / `mediavault gui` is up; a full rescan also always runs
 # once at startup so the local index is fresh before you look at anything.
-scan_interval_minutes: 15
+# This is only the default: the dashboard's "Scan every ..." picker overrides it
+# live (and warns if it's shorter than a full scan actually takes).
+scan_interval_minutes: 60
 
 # Desktop notifications (new duplicates, a root drifting out of sync, new
 # untracked media) fire from the background worker above -- set to false to

@@ -69,7 +69,7 @@ def init(config_path: Path = typer.Option(None, help="Where to write config.yaml
             "db_path: ~/.local/share/mediavault/mediavault.db\n"
             "hash_algo: blake3\n"
             "tmdb_api_key_env: TMDB_API_KEY\n"
-            "scan_interval_minutes: 15\n"
+            "scan_interval_minutes: 60\n"
             "video_extensions: [\".mkv\", \".mp4\", \".m4v\", \".avi\", \".mov\", \".wmv\", \".ts\"]\n".format(
                 __import__("socket").gethostname()
             )

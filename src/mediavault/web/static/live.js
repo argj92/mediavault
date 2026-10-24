@@ -94,7 +94,78 @@
     }
   }
 
+  // ---- schedule panel: times are epoch seconds from the server; show them in
+  // the viewer's own clock and keep them ticking between polls
+  var skew = 0, sched = null;
+  var elLast = document.getElementById('sched-last'), elLastSub = document.getElementById('sched-last-sub');
+  var elNext = document.getElementById('sched-next'), elNextSub = document.getElementById('sched-next-sub');
+  var runBtn = document.getElementById('sched-run');
+  var minutesSel = document.getElementById('sched-minutes'), saveBtn = document.getElementById('sched-save');
+  var adviceEl = document.getElementById('sched-advice');
+  function nowSrv() { return Date.now() / 1000 + skew; }
+  function dur(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 90) return sec + ' sec';
+    var m = sec / 60; if (m < 90) return Math.round(m) + ' min';
+    return (m / 60).toFixed(1).replace('.0', '') + ' hours';
+  }
+  function ago(ts) {
+    var s = nowSrv() - ts; if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' d ago';
+  }
+  function until(ts) {
+    var s = ts - nowSrv(); if (s <= 30) return 'any moment';
+    if (s < 3600) return 'in ' + Math.round(s / 60) + ' min';
+    if (s < 86400) return 'in ' + (s / 3600).toFixed(1).replace('.0', '') + ' h';
+    return 'in ' + Math.round(s / 86400) + ' d';
+  }
+  function clock(ts) {
+    var d = new Date(ts * 1000), same = d.toDateString() === new Date().toDateString();
+    return d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}) + (same ? '' : ' ' + d.toLocaleDateString([], {weekday: 'short'}));
+  }
+  function renderSchedule() {
+    if (!sched || !elLast) return;
+    var sc = sched;
+    elLast.textContent = sc.running ? 'running now…' : (sc.last_finished_at ? ago(sc.last_finished_at) : 'not yet');
+    elLastSub.textContent = (!sc.running && sc.last_finished_at)
+      ? clock(sc.last_finished_at) + (sc.last_duration != null ? ' · took ' + dur(sc.last_duration) : '') : '';
+    if (sc.running) { elNext.textContent = 'after this one'; elNextSub.textContent = ''; }
+    else if (sc.next_run_at) {
+      elNext.textContent = until(sc.next_run_at);
+      elNextSub.textContent = clock(sc.next_run_at) + (sc.next_reason === 'retry' ? ' · retrying early — a drive was unreachable' : '');
+    } else { elNext.textContent = 'not scheduled'; elNextSub.textContent = ''; }
+    runBtn.disabled = !!sc.running;
+  }
+  function showAdvice(a) {
+    if (!adviceEl) return;
+    adviceEl.hidden = !a.message;
+    adviceEl.className = 'sched-advice ' + (a.message ? a.level : '');
+    adviceEl.textContent = a.message;
+  }
+  if (minutesSel) {
+    var adviceTimer = null;
+    minutesSel.addEventListener('change', function () {
+      saveBtn.disabled = +minutesSel.value === +adviceEl.dataset.saved;
+      clearTimeout(adviceTimer);
+      adviceTimer = setTimeout(function () {
+        fetch('/api/schedule/advice?minutes=' + encodeURIComponent(minutesSel.value), {cache: 'no-store'})
+          .then(function (r) { return r.json(); }).then(showAdvice).catch(function () {});
+      }, 150);
+    });
+  }
+  setInterval(renderSchedule, 15000);
+
   function render(data) {
+    if (data.schedule) {
+      skew = data.server_time - Date.now() / 1000;
+      sched = data.schedule;
+      renderSchedule();
+      if (adviceEl && minutesSel && +minutesSel.value === +sched.interval_minutes) {
+        adviceEl.dataset.saved = sched.interval_minutes; saveBtn.disabled = true; showAdvice(sched.advice);
+      }
+    }
     data.roots.forEach(function (r) {
       var card = document.querySelector('.root-card[data-root="' + CSS.escape(r.label) + '"]');
       if (card) {

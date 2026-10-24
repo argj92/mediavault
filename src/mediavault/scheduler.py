@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 
-from . import dedupe, db, notify, suggestions, sync
+from . import dedupe, db, notify, schedule, suggestions, sync
 from .config import AppConfig, RootConfig
 
 log = logging.getLogger("mediavault.scheduler")
@@ -30,12 +30,13 @@ def _reachable(path) -> bool:
         return False
 
 
-def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
-    """Rescans every enabled root, recomputes duplicate groups and each
-    root's sync status against the primary, and looks for untracked inbox
-    media. Returns a summary dict."""
+def scan_roots(conn: sqlite3.Connection, config: AppConfig, only: list[str] | None = None) -> list[str]:
+    """Scans every enabled root (or just the labels in `only`). Returns the
+    error text of each root that had to be skipped."""
     scan_errors = []
     for row in db.list_roots(conn, enabled_only=True):
+        if only is not None and row["label"] not in only:
+            continue
         root = RootConfig.from_row(row)
         try:
             from . import reconnect, scanner
@@ -54,6 +55,14 @@ def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
             # way, skip just this root and keep scanning the rest.
             scan_errors.append(str(exc))
             log.warning("skipping scan for %s: %s", root.label, exc)
+    return scan_errors
+
+
+def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
+    """Rescans every enabled root, recomputes duplicate groups and each
+    root's sync status against the primary, and looks for untracked inbox
+    media. Returns a summary dict."""
+    scan_errors = scan_roots(conn, config)
 
     dup_groups = dedupe.find_duplicates(conn)
 
@@ -110,15 +119,50 @@ def notify_on_changes(conn: sqlite3.Connection, summary: dict, config: AppConfig
 
 
 class BackgroundWorker:
-    """Runs reconcile_once on a timer in a daemon thread. One DB connection is
-    opened per cycle (sqlite3 connections aren't safe to share across
-    threads long-term)."""
+    """Runs scans in a daemon thread: a full reconcile at start-up and then on
+    the interval the user chose (schedule.py), plus scans the UI asks for
+    ("Scan all now", "Scan now" on one root). Only one scan runs at a time, so
+    a manual request while one is underway is refused rather than doubling the
+    load on the drives. One DB connection is opened per cycle (sqlite3
+    connections aren't safe to share across threads long-term)."""
 
     def __init__(self, config: AppConfig):
         self.config = config
         self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._running = threading.Lock()          # held while a scan is underway
+        self._pending = threading.Lock()          # guards the fields below
+        self._pending_full = False
+        self._pending_labels: set[str] = set()
+        self._reschedule = False
+        self._next_run_at: float | None = None
+        self._last_summary: dict | None = None
         self._thread: threading.Thread | None = None
 
+    # ------------------------------------------------------------ requests
+    def is_busy(self) -> bool:
+        return self._running.locked() or self._pending_full or bool(self._pending_labels)
+
+    def request_run(self, labels: list[str] | None = None) -> bool:
+        """Ask for a scan now: every root, or just `labels`. False (nothing
+        queued) if one is already running or queued."""
+        with self._pending:
+            if self.is_busy():
+                return False
+            if labels is None:
+                self._pending_full = True
+            else:
+                self._pending_labels = set(labels)
+        self._wake.set()
+        return True
+
+    def reschedule(self) -> None:
+        """The interval changed: recompute when the next scan is due."""
+        with self._pending:
+            self._reschedule = True
+        self._wake.set()
+
+    # ---------------------------------------------------------------- work
     def _run_cycle(self) -> dict:
         with db.connect(self.config.db_path) as conn:
             db.init_db(conn)
@@ -126,27 +170,99 @@ class BackgroundWorker:
             notify_on_changes(conn, summary, self.config)
             return summary
 
-    def _next_delay(self, summary: dict | None) -> float:
+    def _record(self, fn, *args) -> None:
+        try:
+            with db.connect(self.config.db_path) as conn:
+                fn(conn, *args)
+        except Exception:  # noqa: BLE001 -- bookkeeping must never take a scan down
+            log.exception("could not record scan timing")
+
+    def _run(self, labels: list[str] | None) -> dict | None:
+        """One scan. `labels=None` is a full cycle (scan, duplicates, sync
+        status, notifications) and is what the dashboard's last/next times
+        track; a label list scans just those roots."""
+        summary = None
+        with self._running:
+            started = time.time()
+            if labels is None:
+                self._record(schedule.record_cycle_start, started)
+            try:
+                if labels is None:
+                    summary = self._run_cycle()
+                    self._record(schedule.record_cycle_end, started, True, len(summary.get("scan_errors", [])))
+                else:
+                    with db.connect(self.config.db_path) as conn:
+                        db.init_db(conn)
+                        scan_roots(conn, self.config, only=labels)
+            except Exception:  # noqa: BLE001 — one bad cycle shouldn't kill the worker
+                log.exception("mediavault background scan failed")
+                if labels is None:
+                    self._record(schedule.record_cycle_end, started, False, 0)
+        return summary
+
+    def _interval_seconds(self) -> float:
+        try:
+            with db.connect(self.config.db_path) as conn:
+                return schedule.get_interval_minutes(conn, self.config) * 60
+        except Exception:  # noqa: BLE001
+            return self.config.scan_interval_minutes * 60
+
+    def _next_delay(self, summary: dict | None, interval: float | None = None) -> float:
         """Seconds until the next cycle. After a cycle that failed outright,
         or skipped a root (drive/share not mounted), look again soon rather
         than waiting out the full interval -- a Network Drive that comes back
-        shouldn't sit unindexed for another 15+ minutes (an interval of 24 h
-        would be a full day). Never *longer* than the configured interval."""
-        interval = self.config.scan_interval_minutes * 60
+        shouldn't sit unindexed for another hour (an interval of 24 h would be
+        a full day). Never *longer* than the configured interval."""
+        interval = self._interval_seconds() if interval is None else interval
         if summary is None:
             return min(interval, RETRY_AFTER_FAILURE_SECONDS)
         if summary.get("scan_errors"):
             return min(interval, RETRY_AFTER_SKIPPED_ROOT_SECONDS)
         return interval
 
+    def _plan_next(self, summary: dict | None, base: float | None = None) -> None:
+        interval = self._interval_seconds()
+        delay = self._next_delay(summary, interval)
+        base = time.time() if base is None else base
+        self._next_run_at = base + delay
+        self._last_summary = summary
+        reason = "retry" if delay < interval else ""
+        try:
+            with db.connect(self.config.db_path) as conn:
+                schedule.set_next_run(conn, self._next_run_at, reason)
+        except Exception:  # noqa: BLE001
+            log.exception("could not record the next scan time")
+
     def _loop(self) -> None:
+        due = True  # first cycle immediately; run in the background, not at start-up
         while not self._stop.is_set():
-            summary = None
-            try:
-                summary = self._run_cycle()
-            except Exception:  # noqa: BLE001 — one bad cycle shouldn't kill the worker
-                log.exception("mediavault background reconcile cycle failed")
-            self._stop.wait(self._next_delay(summary))
+            with self._pending:
+                full, labels = self._pending_full, sorted(self._pending_labels)
+                self._pending_full, self._pending_labels = False, set()
+            if full or due:
+                summary = self._run(None)
+                self._plan_next(summary)
+                due = False
+                continue
+            if labels:
+                self._run(labels)
+                continue
+            with self._pending:
+                resched, self._reschedule = self._reschedule, False
+            if resched and self._next_run_at is not None:
+                # keep the same starting point (the last finished cycle), just apply the new interval
+                try:
+                    with db.connect(self.config.db_path) as conn:
+                        last = schedule.read_state(conn)["last_finished_at"]
+                except Exception:  # noqa: BLE001
+                    last = None
+                self._plan_next(self._last_summary, base=last)
+            remaining = (self._next_run_at or 0) - time.time()
+            if remaining <= 0:
+                due = True
+                continue
+            self._wake.wait(min(remaining, 60))
+            self._wake.clear()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -164,5 +280,6 @@ class BackgroundWorker:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wake.set()
         if self._thread:
             self._thread.join(timeout=5)
