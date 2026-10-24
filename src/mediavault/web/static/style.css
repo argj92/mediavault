@@ -432,3 +432,19 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .root-net-edit { font-size: 0.82rem; }
 .root-net-edit > summary { cursor: pointer; color: var(--subtle); }
 .root-net-edit[open] > summary { margin-bottom: 0.5rem; }
+
+/* scan schedule panel */
+.schedule { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0 0.4rem; display: grid; gap: 0.9rem; }
+.sched-times { display: flex; flex-wrap: wrap; gap: 0.75rem 2.5rem; }
+.sched-item { display: flex; flex-direction: column; gap: 0.15rem; min-width: 9rem; }
+.sched-k { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--subtle); font-weight: 650; }
+.sched-v { font-size: 1.15rem; color: var(--bright); font-weight: 650; font-variant-numeric: tabular-nums; }
+.sched-sub { font-size: 0.78rem; color: var(--subtle); min-height: 1.1em; }
+.sched-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.25rem; }
+.sched-form { display: flex; align-items: center; gap: 0.5rem; }
+.sched-form label { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: var(--subtle); }
+.sched-advice { margin: 0; font-size: 0.84rem; line-height: 1.5; padding: 0.55rem 0.8rem; border-radius: 8px; border: 1px solid var(--border); color: var(--text); }
+.sched-advice[hidden] { display: none; }
+.sched-advice.warn { background: rgba(239, 83, 80, 0.08); border-color: rgba(239, 83, 80, 0.4); }
+.sched-advice.note { background: rgba(224, 167, 47, 0.08); border-color: rgba(224, 167, 47, 0.4); }
+.sched-advice.ok { color: var(--subtle); }
