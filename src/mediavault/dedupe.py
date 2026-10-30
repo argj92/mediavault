@@ -17,16 +17,21 @@ from . import db
 
 def _expected_mirror_labels(conn: sqlite3.Connection) -> set[str]:
     """Root labels where a file being fully synced (present, identical) is
-    the sync feature working as intended, not something to clean up: primary
-    plus every mirror-mode backup that's supposed to hold a full copy of it.
-    subset/watch roots are never included -- a file also turning up there is
-    still worth flagging (it's not part of the designed backup set)."""
+    the sync feature working as intended, not something to clean up: primary,
+    every mirror-mode backup that's supposed to hold a full copy of it, and any
+    iCloud root -- what lives in iCloud is a deliberate choice (it holds only
+    the part of the library you want available there), so a copy there is
+    never "the extra one". watch roots (Downloads, inboxes) are never included:
+    a file also turning up there is still worth flagging."""
     primary_row = db.get_primary_root(conn)
     if primary_row is None:
         return set()
     labels = {primary_row["label"]}
     for row in db.syncable_roots(conn, exclude_label=primary_row["label"]):
         if row["mode"] == "mirror":
+            labels.add(row["label"])
+    for row in db.list_roots(conn, enabled_only=True):
+        if row["role"] == "icloud":
             labels.add(row["label"])
     return labels
 

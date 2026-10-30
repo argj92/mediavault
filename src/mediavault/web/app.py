@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import browse, catalog, cloud, db, dedupe, metadata, peers, protection, reconnect, recycle_bin, schedule, scheduler, suggestions, sync
+from .. import browse, catalog, cloud, db, dedupe, icloud, metadata, peers, protection, reconnect, recycle_bin, schedule, scheduler, suggestions, sync
 from ..config import AppConfig, RootConfig
 from ..lan import LanDiscovery
 from .guard import RequestGuard
@@ -379,10 +379,15 @@ def index(request: Request, msg: str | None = None):
                 continue
             p = Path(r["path"])
             if not p.exists():
-                icloud_summaries.append({"root": r, "error": "path not currently accessible"})
+                # The index still knows what's in there, so the space breakdown
+                # stays useful (it's the last scan's view); only the live
+                # download check needs the folder.
+                icloud_summaries.append({"root": r, "error": "This folder isn't reachable right now — showing what the last scan found.",
+                                         "space": icloud.analyze(conn, r["label"])})
                 continue
             icloud_summaries.append(
-                {"root": r, "summary": cloud.storage_summary(p), "largest": cloud.largest_downloaded_files(p, top_n=25)}
+                {"root": r, "summary": cloud.storage_summary(p), "largest": cloud.largest_downloaded_files(p, top_n=25),
+                 "space": icloud.analyze(conn, r["label"])}
             )
 
         protection_report = protection.compute_protection(conn, config.machine)
@@ -876,6 +881,29 @@ def duplicates_quarantine_bulk(
 
 
 # ---------------------------------------------------------------------- trash
+
+@app.post("/icloud/reveal")
+def icloud_reveal(request: Request, root_label: str = Form(...), rel_path: str = Form("")):
+    """Shows a file or folder of an iCloud root in Finder, so it can be removed
+    there (Finder → Move to Trash). Only paths the index knows under an iCloud
+    root, and only inside that root -- nothing else can be opened from here."""
+    import subprocess
+
+    with get_conn(request) as conn:
+        row = db.get_root(conn, root_label)
+        if row is None or row["role"] != "icloud" or not icloud.is_known_path(conn, root_label, rel_path):
+            return flash_redirect("#icloud", "That isn't something in an iCloud folder MediaVault tracks.")
+        target = icloud.resolve_inside(row["path"], rel_path)
+    if target is None or not target.exists():
+        return flash_redirect("#icloud", "That item isn't there any more — rescan and try again.")
+    if platform.system() != "Darwin":
+        return flash_redirect("#icloud", "Showing in Finder only works on macOS.")
+    try:
+        subprocess.run(["open", "-R", str(target)], check=True, timeout=15, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return flash_redirect("#icloud", f"Couldn't open Finder: {exc}")
+    return flash_redirect("#icloud", f"Showing “{target.name}” in Finder on the Mac running MediaVault.")
+
 
 @app.post("/system/full-disk-access")
 def open_full_disk_access(request: Request):
