@@ -116,6 +116,7 @@ def time_until(unix_ts) -> str:
 templates.env.globals["static_url"] = static_url
 templates.env.filters["human_bytes"] = human_bytes
 templates.env.filters["time_ago"] = time_ago
+templates.env.filters["when"] = lambda ts: "?" if ts is None else time.strftime("%-d %b %H:%M", time.localtime(ts))
 templates.env.filters["time_until"] = time_until
 templates.env.filters["duration"] = lambda sec: "—" if sec is None else schedule.human_duration(sec)
 
@@ -749,6 +750,34 @@ def sync_root(request: Request, label: str):
         msg += f" {len(new_plan.copy_to_a)} file(s) exist only on {label} — see Promote below."
     if new_plan.needs_confirmation:
         msg += " Some items need manual review (deletions or conflicts)."
+    return flash_redirect("#sync", msg)
+
+
+@app.post("/sync/{label}/restore")
+def sync_restore_vanished(request: Request, label: str):
+    """The safe answer to a deletion candidate: put the file back from the
+    side that still has it, instead of deleting it from there too."""
+    config = get_config(request)
+    with get_conn(request) as conn:
+        primary_row = db.get_primary_root(conn)
+        other_row = db.get_root(conn, label)
+        if primary_row is None or other_row is None:
+            return flash_redirect("#sync", "Root no longer configured.")
+        primary = RootConfig.from_row(primary_row)
+        other = RootConfig.from_row(other_row)
+        plan = sync.plan_sync(conn, primary, other)
+        results = sync.execute_sync(primary, other, plan, restore_vanished=True)
+
+        from .. import scanner
+
+        scanner.scan_root(conn, primary, hash_algo=config.hash_algo)
+        scanner.scan_root(conn, other, hash_algo=config.hash_algo)
+    msg = f"{label}: restored {results['restored_to_b']} to {label}"
+    if results["restored_to_a"]:
+        msg += f" and {results['restored_to_a']} to primary"
+    msg += "."
+    if results["errors"]:
+        msg += f" {len(results['errors'])} error(s)."
     return flash_redirect("#sync", msg)
 
 
