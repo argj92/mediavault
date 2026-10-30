@@ -26,6 +26,7 @@ dev = ["pytest>=8.0", "httpx>=0.27"]
 mediavault = "mediavault.cli:app"
 mediavault-web = "mediavault.cli:web_entry"
 mediavault-gui = "mediavault.cli:gui_entry"
+media-library = "mediavault.library:main_entry"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

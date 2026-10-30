@@ -28,6 +28,7 @@ import ipaddress
 import json
 import socket
 import subprocess
+import time
 from urllib.parse import urlsplit
 
 from ..tailscale import find_tailscale
@@ -58,25 +59,32 @@ def _is_ip(host: str) -> bool:
 
 
 _ts_name: str | None = None
+_ts_failed_at: float = float("-inf")
+_TS_RETRY_SECONDS = 30.0
 
 
 def tailscale_dns_name() -> str | None:
     """This machine's MagicDNS name (e.g. 'mac-mini.tailnet.ts.net'), if
-    Tailscale is installed and up. Best-effort: None on any failure. Only a
-    success is remembered -- a failure (Tailscale not up yet at login) is
-    retried rather than blocking the name for the life of the process."""
-    global _ts_name
+    Tailscale is installed and up. Best-effort: None on any failure. A success
+    is remembered for the life of the process. A failure (Tailscale not up yet
+    at login) is retried, but not on every request -- this runs once per HTTP
+    request, and a subprocess that can take seconds to time out must not."""
+    global _ts_name, _ts_failed_at
     if _ts_name:
         return _ts_name
+    if time.monotonic() - _ts_failed_at < _TS_RETRY_SECONDS:
+        return None
     exe = find_tailscale()
-    if not exe:
-        return None
-    try:
-        out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=3).stdout
-        name = json.loads(out).get("Self", {}).get("DNSName", "")
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return None
+    name = ""
+    if exe:
+        try:
+            out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True, timeout=3).stdout
+            name = json.loads(out).get("Self", {}).get("DNSName", "")
+        except (OSError, subprocess.SubprocessError, ValueError):
+            name = ""
     _ts_name = name.rstrip(".").lower() or None
+    if _ts_name is None:
+        _ts_failed_at = time.monotonic()
     return _ts_name
 
 
