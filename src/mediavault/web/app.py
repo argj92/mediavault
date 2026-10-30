@@ -464,6 +464,7 @@ def index(request: Request, msg: str | None = None):
             "trash_bytes": trash_scan["total_bytes"],
             "trash_accurate": trash_scan["accurate"],
             "trash_access_errors": trash_scan["access_errors"],
+            "access_app": str(recycle_bin.app_needing_access()),
             "protection_report": protection_report,
             "remote_catalogs": remote_catalogs,
             "library_roots": library_roots,
@@ -902,6 +903,18 @@ def icloud_reveal(request: Request, root_label: str = Form(...), rel_path: str =
     except (OSError, subprocess.SubprocessError) as exc:
         return flash_redirect("#icloud", f"Couldn't open Finder: {exc}")
     return flash_redirect("#icloud", f"Showing “{target.name}” in Finder on the Mac running MediaVault.")
+
+
+@app.post("/system/full-disk-access")
+def open_full_disk_access(request: Request):
+    ok, msg = recycle_bin.open_full_disk_access_settings()
+    return flash_redirect("#recycle-bin", msg if not ok else "Opened System Settings → Full Disk Access on the Mac running MediaVault.")
+
+
+@app.post("/system/reveal-app")
+def reveal_app(request: Request):
+    ok, msg = recycle_bin.reveal_app_needing_access()
+    return flash_redirect("#recycle-bin", msg if not ok else "Showing the app in Finder on the Mac running MediaVault — drag it into the Full Disk Access list.")
 
 
 @app.post("/recycle-bin/empty")

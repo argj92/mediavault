@@ -68,6 +68,111 @@ def status() -> str:
     return f"No background-service support for {system}."
 
 
+# ------------------------------------------------- inspect and control
+
+def log_paths() -> dict[str, Path]:
+    logs = _log_dir()
+    return {"out": logs / "service.log", "err": logs / "service.err.log"}
+
+
+def installed() -> bool:
+    system = platform.system()
+    if system == "Darwin":
+        return _plist_path().exists()
+    if system == "Linux":
+        return _unit_path().exists()
+    return False
+
+
+def definition() -> dict | None:
+    """What the installed service was set up to do (macOS: read back from the
+    plist): {bin, hosts, port, workdir, config}. None if not installed or
+    unreadable. This is the source of truth for 'where should it be
+    listening', rather than guessing."""
+    if platform.system() != "Darwin" or not _plist_path().exists():
+        return None
+    import plistlib
+
+    try:
+        data = plistlib.loads(_plist_path().read_bytes())
+    except (OSError, ValueError):
+        return None
+    args = [str(a) for a in data.get("ProgramArguments", [])]
+    hosts = [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--host"]
+    port = next((int(args[i + 1]) for i, a in enumerate(args[:-1]) if a == "--port" and args[i + 1].isdigit()), 8420)
+    return {
+        "bin": args[0] if args else None,
+        "hosts": hosts or ["127.0.0.1"],
+        "port": port,
+        "workdir": data.get("WorkingDirectory"),
+        "config": (data.get("EnvironmentVariables") or {}).get("MEDIAVAULT_CONFIG"),
+    }
+
+
+def pid() -> int | None:
+    """The running service's process id, or None if it isn't running."""
+    system = platform.system()
+    if system == "Darwin":
+        out = subprocess.run(["launchctl", "print", f"gui/{_uid()}/{LABEL}"], capture_output=True, text=True)
+        if out.returncode != 0:
+            return None
+        import re
+
+        m = re.search(r"^\s*pid = (\d+)", out.stdout, re.MULTILINE)
+        return int(m.group(1)) if m else None
+    if system == "Linux":
+        out = subprocess.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", "mediavault.service"],
+                             capture_output=True, text=True)
+        value = out.stdout.strip()
+        return int(value) if value.isdigit() and int(value) > 0 else None
+    return None
+
+
+def _loaded_macos() -> bool:
+    return subprocess.run(["launchctl", "print", f"gui/{_uid()}/{LABEL}"], capture_output=True).returncode == 0
+
+
+def start() -> str:
+    """Start the installed service (no-op if it's already running)."""
+    if not installed():
+        raise RuntimeError("The service isn't installed yet: run `media-library install`.")
+    system = platform.system()
+    if system == "Darwin":
+        if not _loaded_macos():
+            r = subprocess.run(["launchctl", "bootstrap", f"gui/{_uid()}", str(_plist_path())], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"launchctl bootstrap failed: {r.stderr.strip()}")
+        else:
+            subprocess.run(["launchctl", "kickstart", f"gui/{_uid()}/{LABEL}"], capture_output=True)
+        return "Started."
+    subprocess.run(["systemctl", "--user", "start", "mediavault.service"], check=True)
+    return "Started."
+
+
+def stop() -> str:
+    """Stop it until the next start (or login). Unloads it from launchd, since
+    a plain kill would just be undone by KeepAlive."""
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.run(["launchctl", "bootout", f"gui/{_uid()}/{LABEL}"], capture_output=True)
+        return "Stopped."
+    subprocess.run(["systemctl", "--user", "stop", "mediavault.service"], check=True)
+    return "Stopped."
+
+
+def restart() -> str:
+    system = platform.system()
+    if system == "Darwin":
+        if not _loaded_macos():
+            return start()
+        r = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{_uid()}/{LABEL}"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"launchctl kickstart failed: {r.stderr.strip()}")
+        return "Restarted."
+    subprocess.run(["systemctl", "--user", "restart", "mediavault.service"], check=True)
+    return "Restarted."
+
+
 # ------------------------------------------------------------------- macOS
 
 def _install_macos(bin_path: Path, project_dir: Path, config_path: Path, port: int, hosts: list[str]) -> str:
