@@ -96,7 +96,7 @@ def test_background_scan_tries_to_bring_an_unreachable_root_back(conn, tmp_path,
     _root(conn, tmp_path)
     tried = []
     monkeypatch.setattr(reconnect, "try_auto", lambda c, row, now=None: tried.append(row["label"]) or False)
-    config = AppConfig(machine="m", db_path=tmp_path / "x.db", hash_algo="sha256", tmdb_api_key_env="X",
+    config = AppConfig(machine="m", db_path=tmp_path / "mediavault.db", hash_algo="sha256", tmdb_api_key_env="X",
                        video_extensions=[".mkv"], scan_interval_minutes=15)
 
     summary = scheduler.reconcile_once(conn, config)

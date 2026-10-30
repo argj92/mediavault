@@ -641,7 +641,7 @@ def schedule_run(request: Request):
     if worker is None:
         return flash_redirect("#roots", "Background scanning isn't running in this process.")
     if not worker.request_run(None):
-        return flash_redirect("#roots", "A scan is already running — it will show up below when it finishes.")
+        return flash_redirect("#roots", "A full scan is already running or queued — it will show up below when it finishes.")
     return flash_redirect("#roots", "Scan started. Progress shows on each root below.")
 
 
@@ -681,8 +681,8 @@ def roots_scan(request: Request, label: str):
             if db.get_root(conn, label) is None:
                 return flash_redirect("#roots", f"No such root '{label}'.")
         if not worker.request_run([label]):
-            return flash_redirect("#roots", "A scan is already running — try again when it finishes.")
-        return flash_redirect("#roots", f"Scanning '{label}' in the background.")
+            return flash_redirect("#roots", f"'{label}' is already being scanned.")
+        return flash_redirect("#roots", f"Scanning '{label}' in the background — other drives keep scanning alongside it.")
     with get_conn(request) as conn:
         row = db.get_root(conn, label)
         if row is None:

@@ -30,32 +30,74 @@ def _reachable(path) -> bool:
         return False
 
 
-def scan_roots(conn: sqlite3.Connection, config: AppConfig, only: list[str] | None = None) -> list[str]:
-    """Scans every enabled root (or just the labels in `only`). Returns the
-    error text of each root that had to be skipped."""
-    scan_errors = []
-    for row in db.list_roots(conn, enabled_only=True):
-        if only is not None and row["label"] not in only:
-            continue
-        root = RootConfig.from_row(row)
-        try:
-            from . import reconnect, scanner
+# At most one scan per root at a time, however it was started (the schedule,
+# "Scan all now", a root's own "Scan now"): scanning the same folder twice at
+# once only doubles the reading and hashing.
+_root_locks: dict[str, threading.Lock] = {}
+_root_locks_guard = threading.Lock()
 
-            if not _reachable(root.path):
-                # A network share that dropped off: if the user saved where to
-                # re-mount it from, try (throttled) before giving up on this cycle.
-                reconnect.try_auto(conn, row)
-            scanner.scan_root(conn, root, hash_algo=config.hash_algo)
-        except OSError as exc:
-            # A removable/backup/iCloud/network drive not being mounted right
-            # now (FileNotFoundError) is normal. A network mount that drops
-            # mid-scan (stale SMB/NFS handle, sleep/wake, Wi-Fi hiccup) raises
-            # some other OSError partway through the walk/stat/hash calls --
-            # equally not worth losing the whole reconcile cycle over. Either
-            # way, skip just this root and keep scanning the rest.
-            scan_errors.append(str(exc))
-            log.warning("skipping scan for %s: %s", root.label, exc)
-    return scan_errors
+# Different roots are usually different drives (a USB disk, a network share,
+# the internal disk), so they scan side by side. Capped so a library with many
+# roots doesn't open that many readers and database writers at once.
+MAX_PARALLEL_SCANS = 4
+
+
+def root_lock(label: str) -> threading.Lock:
+    with _root_locks_guard:
+        return _root_locks.setdefault(label, threading.Lock())
+
+
+def _scan_one(config: AppConfig, row) -> str | None:
+    """Scan a single root on its own connection (sqlite3 connections belong to
+    one thread). Returns the error text if it had to be skipped, else None. A
+    root already being scanned elsewhere is left to that scan."""
+    root = RootConfig.from_row(row)
+    lock = root_lock(root.label)
+    if not lock.acquire(blocking=False):
+        log.info("%s is already being scanned; not starting a second scan", root.label)
+        return None
+    try:
+        with db.connect(config.db_path) as conn:
+            try:
+                from . import reconnect, scanner
+
+                if not _reachable(root.path):
+                    # A network share that dropped off: if the user saved where to
+                    # re-mount it from, try (throttled) before giving up on this cycle.
+                    reconnect.try_auto(conn, row)
+                scanner.scan_root(conn, root, hash_algo=config.hash_algo)
+            except OSError as exc:
+                # A removable/backup/iCloud/network drive not being mounted right
+                # now (FileNotFoundError) is normal. A network mount that drops
+                # mid-scan (stale SMB/NFS handle, sleep/wake, Wi-Fi hiccup) raises
+                # some other OSError partway through the walk/stat/hash calls --
+                # equally not worth losing the whole reconcile cycle over. Either
+                # way, skip just this root and keep scanning the rest.
+                log.warning("skipping scan for %s: %s", root.label, exc)
+                return str(exc)
+        return None
+    finally:
+        lock.release()
+
+
+def scan_roots(conn: sqlite3.Connection, config: AppConfig, only: list[str] | None = None) -> list[str]:
+    """Scans every enabled root (or just the labels in `only`), in parallel
+    across roots. Returns the error text of each root that had to be skipped."""
+    # The scans below write through their own connections. End any transaction
+    # this one has open first: its writes must be visible to them, and it must
+    # not hold the database's single write lock while they run.
+    conn.commit()
+    rows = [r for r in db.list_roots(conn, enabled_only=True) if only is None or r["label"] in only]
+    if not rows:
+        return []
+    if len(rows) == 1:
+        err = _scan_one(config, rows[0])
+        return [err] if err else []
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=min(len(rows), MAX_PARALLEL_SCANS), thread_name_prefix="mediavault-scan") as pool:
+        results = list(pool.map(lambda r: _scan_one(config, r), rows))
+    return [e for e in results if e]
 
 
 def reconcile_once(conn: sqlite3.Connection, config: AppConfig) -> dict:
@@ -130,10 +172,10 @@ class BackgroundWorker:
         self.config = config
         self._stop = threading.Event()
         self._wake = threading.Event()
-        self._running = threading.Lock()          # held while a scan is underway
+        self._running = threading.Lock()          # held while a full cycle is underway
         self._pending = threading.Lock()          # guards the fields below
         self._pending_full = False
-        self._pending_labels: set[str] = set()
+        self._manual: set[str] = set()            # roots with a "Scan now" queued or running
         self._reschedule = False
         self._next_run_at: float | None = None
         self._last_summary: dict | None = None
@@ -141,20 +183,41 @@ class BackgroundWorker:
 
     # ------------------------------------------------------------ requests
     def is_busy(self) -> bool:
-        return self._running.locked() or self._pending_full or bool(self._pending_labels)
+        return self._running.locked() or self._pending_full or bool(self._manual)
 
     def request_run(self, labels: list[str] | None = None) -> bool:
-        """Ask for a scan now: every root, or just `labels`. False (nothing
-        queued) if one is already running or queued."""
-        with self._pending:
-            if self.is_busy():
-                return False
-            if labels is None:
+        """Ask for a scan now: every root (`labels=None`), or just those roots.
+        True if something was started or queued; False if that work is already
+        underway (a full scan running or queued; every named root already being
+        scanned). Root scans don't wait for each other -- different drives scan
+        side by side -- and don't wait for a full cycle either."""
+        if labels is None:
+            with self._pending:
+                if self._running.locked() or self._pending_full:
+                    return False
                 self._pending_full = True
-            else:
-                self._pending_labels = set(labels)
-        self._wake.set()
-        return True
+            self._wake.set()
+            return True
+        started = False
+        for label in labels:
+            with self._pending:
+                if label in self._manual or root_lock(label).locked():
+                    continue
+                self._manual.add(label)
+            threading.Thread(target=self._scan_label, args=(label,), daemon=True, name=f"mediavault-scan-{label}").start()
+            started = True
+        return started
+
+    def _scan_label(self, label: str) -> None:
+        try:
+            with db.connect(self.config.db_path) as conn:
+                db.init_db(conn)
+                scan_roots(conn, self.config, only=[label])
+        except Exception:  # noqa: BLE001
+            log.exception("scan of %s failed", label)
+        finally:
+            with self._pending:
+                self._manual.discard(label)
 
     def reschedule(self) -> None:
         """The interval changed: recompute when the next scan is due."""
@@ -177,27 +240,19 @@ class BackgroundWorker:
         except Exception:  # noqa: BLE001 -- bookkeeping must never take a scan down
             log.exception("could not record scan timing")
 
-    def _run(self, labels: list[str] | None) -> dict | None:
-        """One scan. `labels=None` is a full cycle (scan, duplicates, sync
-        status, notifications) and is what the dashboard's last/next times
-        track; a label list scans just those roots."""
+    def _run(self, labels: list[str] | None = None) -> dict | None:
+        """One full cycle (scan every root, duplicates, sync status,
+        notifications) -- what the dashboard's last/next times track."""
         summary = None
         with self._running:
             started = time.time()
-            if labels is None:
-                self._record(schedule.record_cycle_start, started)
+            self._record(schedule.record_cycle_start, started)
             try:
-                if labels is None:
-                    summary = self._run_cycle()
-                    self._record(schedule.record_cycle_end, started, True, len(summary.get("scan_errors", [])))
-                else:
-                    with db.connect(self.config.db_path) as conn:
-                        db.init_db(conn)
-                        scan_roots(conn, self.config, only=labels)
+                summary = self._run_cycle()
+                self._record(schedule.record_cycle_end, started, True, len(summary.get("scan_errors", [])))
             except Exception:  # noqa: BLE001 — one bad cycle shouldn't kill the worker
                 log.exception("mediavault background scan failed")
-                if labels is None:
-                    self._record(schedule.record_cycle_end, started, False, 0)
+                self._record(schedule.record_cycle_end, started, False, 0)
         return summary
 
     def _interval_seconds(self) -> float:
@@ -237,15 +292,11 @@ class BackgroundWorker:
         due = True  # first cycle immediately; run in the background, not at start-up
         while not self._stop.is_set():
             with self._pending:
-                full, labels = self._pending_full, sorted(self._pending_labels)
-                self._pending_full, self._pending_labels = False, set()
+                full, self._pending_full = self._pending_full, False
             if full or due:
-                summary = self._run(None)
+                summary = self._run()
                 self._plan_next(summary)
                 due = False
-                continue
-            if labels:
-                self._run(labels)
                 continue
             with self._pending:
                 resched, self._reschedule = self._reschedule, False
