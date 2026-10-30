@@ -724,13 +724,28 @@
     <p class="subtle">Your OS's own Trash/Recycle Bin — often forgotten about and worth checking when reclaiming space. Deleting here is immediate and permanent.</p>
 
     {% if not trash_accurate %}
-    <div class="flash warn-flash">
-      <b>This list is incomplete — mediavault can't fully read your Trash.</b>
-      {% for err in trash_access_errors %}<br>&middot; {{ err.location }}: {{ err.error }}{% endfor %}
-      <br><br>
-      On macOS: <b>System Settings &rarr; Privacy &amp; Security &rarr; Full Disk Access</b> &rarr; enable it for
-      whichever app/terminal runs mediavault, then reload this page. Until then, any total shown here is a
-      <b>floor</b>, not the real size — there's more in there than mediavault can see.
+    <div class="notice warn" id="trash-access">
+      <b>This list is incomplete — macOS isn't letting MediaVault read your Trash.</b>
+      <ul class="notice-list">
+        {% for err in trash_access_errors %}<li><code>{{ err.location }}</code> — {{ err.error }}</li>{% endfor %}
+      </ul>
+      <p>
+        macOS blocks background programs from Trash folders and drives' <code>.Trashes</code> until they're
+        given <b>Full Disk Access</b>. It only affects this list — your duplicates, quarantine and scans don't need it.
+        Totals shown here are a <b>floor</b>, not the real size.
+      </p>
+      <ol class="notice-steps">
+        <li>Click <b>Open Full Disk Access</b> (it opens on the Mac running MediaVault).</li>
+        <li>Click <b>+</b>, then add this program: <code>{{ access_app }}</code>
+          — <b>Show in Finder</b> below reveals it so you can drag it into the list.</li>
+        <li>Make sure its switch is on, then restart MediaVault and reload this page.</li>
+      </ol>
+      <div class="notice-actions">
+        <form method="post" action="/system/full-disk-access"><button>Open Full Disk Access</button></form>
+        <form method="post" action="/system/reveal-app"><button>Show in Finder</button></form>
+      </div>
+      <p class="subtle">If you run MediaVault from Terminal instead of as a background service, grant Terminal (or your terminal app) instead.
+        After a Homebrew Python upgrade the entry may need adding again.</p>
     </div>
     {% endif %}
 

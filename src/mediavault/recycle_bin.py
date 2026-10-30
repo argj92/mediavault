@@ -15,6 +15,45 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+FULL_DISK_ACCESS_PANE = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+
+
+def app_needing_access() -> Path:
+    """The program macOS will judge when MediaVault reads a protected place
+    (Trash, a drive's .Trashes): the interpreter running this process. For a
+    Python.app bundle (Homebrew's) that's the .app, which is what Full Disk
+    Access wants to be given; otherwise the executable itself. Resolved
+    through symlinks, because a venv's `python` is only a link to it."""
+    exe = Path(os.path.realpath(__import__("sys").executable))
+    for parent in exe.parents:
+        if parent.suffix == ".app":
+            return parent
+    return exe
+
+
+def open_full_disk_access_settings() -> tuple[bool, str]:
+    """Opens macOS's Full Disk Access pane on this machine. Fixed URL, nothing
+    from a request."""
+    return _open([FULL_DISK_ACCESS_PANE])
+
+
+def reveal_app_needing_access() -> tuple[bool, str]:
+    """Shows the program in Finder so it can be dragged into that list."""
+    return _open(["-R", str(app_needing_access())])
+
+
+def _open(args: list[str]) -> tuple[bool, str]:
+    import subprocess
+
+    if platform.system() != "Darwin":
+        return False, "This only applies to macOS."
+    try:
+        subprocess.run(["open", *args], check=True, timeout=15, capture_output=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"Couldn't open it: {exc}"
+    return True, "Opened on the Mac running MediaVault."
+
+
 @dataclass
 class TrashItem:
     path: Path

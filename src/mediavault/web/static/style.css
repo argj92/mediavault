@@ -209,11 +209,16 @@ h3 { margin-top: 1.4rem; color: var(--bright); font-size: 0.95rem; font-weight: 
 .flash > span { flex: 1; }
 .flash-close { background: none; border: none; color: var(--subtle); font-size: 1.2rem; line-height: 1; padding: 0 0.2rem; box-shadow: none; }
 .flash-close:hover { color: var(--bright); box-shadow: none; }
-.flash.warn-flash {
-  background: rgba(224, 167, 47, 0.08);
-  border-color: rgba(224, 167, 47, 0.4);
-  margin: 0.75rem 0 1.25rem;
-}
+/* An inline message that belongs to its section (unlike .flash, which is a
+   sticky toast for the result of an action). */
+.notice { border: 1px solid var(--border-bright); background: var(--accent-dim); border-radius: 8px; padding: 0.8rem 1rem; margin: 0.75rem 0 1.25rem; font-size: 0.88rem; line-height: 1.55; }
+.notice.warn { background: rgba(224, 167, 47, 0.08); border-color: rgba(224, 167, 47, 0.4); }
+.notice p { margin: 0.6rem 0 0; }
+.notice-list { margin: 0.5rem 0 0; padding-left: 1.2rem; color: var(--subtle); font-size: 0.82rem; }
+.notice-steps { margin: 0.6rem 0 0; padding-left: 1.3rem; }
+.notice-steps li { margin: 0.25rem 0; }
+.notice code { overflow-wrap: anywhere; }
+.notice-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
 
 /* Compact inline stat line — replaces boxed "tiles" */
 .stat-line {
