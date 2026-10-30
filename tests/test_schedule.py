@@ -165,12 +165,12 @@ def test_next_run_uses_the_users_interval_not_just_the_config(tmp_path):
         assert schedule.read_state(c)["next_run_at"] == 10_000.0 + 180 * 60
 
 
-def test_manual_request_is_refused_while_a_scan_is_running(tmp_path):
+def test_a_second_full_scan_is_refused_while_one_is_queued_or_running(tmp_path):
     w = scheduler.BackgroundWorker(make_config(tmp_path))
     assert w.request_run(None) is True and w.request_run(None) is False      # already queued
     w2 = scheduler.BackgroundWorker(make_config(tmp_path))
     with w2._running:
-        assert w2.request_run(["x"]) is False
+        assert w2.request_run(None) is False                                 # a cycle is running
 
 
 def test_manual_run_triggers_a_cycle_now_and_a_label_run_scans_only_that_root(tmp_path, monkeypatch):
