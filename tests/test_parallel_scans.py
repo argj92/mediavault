@@ -181,3 +181,88 @@ def test_a_full_scan_can_be_requested_while_a_root_scan_runs(tmp_path, monkeypat
     assert inside.wait(3)
     assert w.request_run(None) is True        # the cycle will skip Passport (locked) and scan the rest
     release.set()
+
+
+# ------------------------------------------- a blocked walk must not hold the lock
+
+def _slow_walk(monkeypatch, slow_root_path, unblock: threading.Event):
+    """Walks that stall mid-way (a huge network folder listing) for one root."""
+    from mediavault import cloud as cloud_mod
+    real = cloud_mod.walk_cloud_aware
+
+    def walk(root):
+        entries = real(root)
+        if root != slow_root_path:
+            yield from entries
+            return
+        for i, e in enumerate(entries):
+            yield e
+            if i == 1:
+                unblock.wait(8)          # stalls inside the walk, after two files were upserted
+
+    monkeypatch.setattr(cloud_mod, "walk_cloud_aware", walk)
+
+
+def test_a_scan_stalled_inside_its_walk_does_not_hold_the_database_write_lock(tmp_path, monkeypatch):
+    """The live bug: a slow Network Drive listing kept its scan's write
+    transaction open, so every other scan waited on it -- 'parallel' scans ran
+    one after another."""
+    cfg = make_config(tmp_path)
+    with db.connect(cfg.db_path) as c:
+        db.init_db(c)
+        slow, = _roots(c, tmp_path, 1, files=5)
+    unblock = threading.Event()
+    _slow_walk(monkeypatch, slow.path, unblock)
+
+    def run_scan():
+        with db.connect(cfg.db_path) as c2:
+            scanner.scan_root(c2, slow, hash_algo="sha256")
+
+    t = threading.Thread(target=run_scan)
+    t.start()
+    try:
+        time.sleep(0.3)                                  # scan is now stalled mid-walk
+        started = time.monotonic()
+        with db.connect(cfg.db_path) as other:
+            db.set_worker_state(other, "poke", 1)        # any other writer: another root's scan, the web UI
+        waited = time.monotonic() - started
+    finally:
+        unblock.set()
+        t.join(10)
+
+    assert waited < 2.0, f"another writer waited {waited:.1f}s behind a scan stalled in its walk"
+
+
+def test_a_fast_root_finishes_while_a_slow_one_is_stalled_in_its_walk(conn, tmp_path, monkeypatch):
+    slow, fast = _roots(conn, tmp_path, 2, files=5)
+    unblock = threading.Event()
+    _slow_walk(monkeypatch, slow.path, unblock)
+    real = scanner.scan_root
+
+    def scan_root(c, root, hash_algo="sha256"):
+        out = real(c, root, hash_algo=hash_algo)
+        if root.label == fast.label:
+            unblock.set()            # only the fast root finishing lets the slow one continue
+        return out
+
+    monkeypatch.setattr(scanner, "scan_root", scan_root)
+    started = time.monotonic()
+
+    errors = scheduler.scan_roots(conn, make_config(tmp_path))
+
+    assert errors == [] and time.monotonic() - started < 6
+    assert {f["root_label"] for f in db.all_files(conn)} == {"drive0", "drive1"}
+
+
+def test_walk_errors_still_surface_with_the_walk_on_another_thread(conn, tmp_path, monkeypatch):
+    from mediavault import cloud as cloud_mod
+    root, = _roots(conn, tmp_path, 1)
+
+    def boom(path):
+        yield from ()
+        raise ConnectionError("stale NFS file handle")
+
+    monkeypatch.setattr(cloud_mod, "walk_cloud_aware", boom)
+    with pytest.raises(ConnectionError, match="stale NFS"):
+        scanner.scan_root(conn, root, hash_algo="sha256")
+    assert db.get_abandoned_scan(conn, "drive0")["error"].startswith("ConnectionError")
