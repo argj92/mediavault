@@ -240,14 +240,18 @@
       <details class="subsection">
         <summary>Needs review ({{ s.plan.delete_from_a|length + s.plan.delete_from_b|length + s.plan.conflicts|length }})</summary>
         {% if s.plan.delete_from_a or s.plan.delete_from_b %}
-        <p class="subtle">These files disappeared from one mirror side. Confirm to also remove them from the other side — this is irreversible.</p>
+        <p class="subtle">These files were on both sides at the same time, and have since disappeared from one of them. (Files that only ever moved from one side to the other aren't listed here — they show up as plain copies.) MediaVault can't tell whether you removed them on purpose or something else did (a share hiccup, a clean-up elsewhere), so it doesn't guess. <b>Putting them back is safe</b> — it copies from the side that still has them.</p>
         <ul>
-          {% for rel in s.plan.delete_from_a %}<li>remove from <b>primary</b>: {{ rel }}</li>{% endfor %}
-          {% for rel in s.plan.delete_from_b %}<li>remove from <b>{{ s.root.label }}</b>: {{ rel }}</li>{% endfor %}
+          {% for rel in s.plan.delete_from_a %}{% set h = s.plan.history[rel] %}<li>gone from <b>{{ s.root.label }}</b>, still on <b>primary</b>: {{ rel }}<br><span class="subtle">on {{ s.root.label }} {{ h.gone_first_seen|when }} – {{ h.gone_last_seen|when }}; on primary since {{ h.present_first_seen|when }}</span></li>{% endfor %}
+          {% for rel in s.plan.delete_from_b %}{% set h = s.plan.history[rel] %}<li>gone from <b>primary</b>, still on <b>{{ s.root.label }}</b>: {{ rel }}<br><span class="subtle">on primary {{ h.gone_first_seen|when }} – {{ h.gone_last_seen|when }}; on {{ s.root.label }} since {{ h.present_first_seen|when }}</span></li>{% endfor %}
         </ul>
+        <form method="post" action="/sync/{{ s.root.label }}/restore">
+          <button>Put them back (copy)</button>
+        </form>
+        <p class="subtle">Or, if you did delete them on purpose, finish the job on the other side:</p>
         <form method="post" action="/sync/{{ s.root.label }}/apply-deletes" onsubmit="return confirm('Permanently delete these files from the side(s) listed above?');">
           <input type="hidden" name="confirm" value="yes">
-          <button class="danger">Apply deletions</button>
+          <button class="danger">Delete from the other side too (irreversible)</button>
         </form>
         {% endif %}
         {% if s.plan.conflicts %}

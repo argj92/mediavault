@@ -34,6 +34,8 @@ class SyncPlan:
     conflicts: list[str] = field(default_factory=list)   # differing content both sides
     unverifiable: list[str] = field(default_factory=list)  # one side is a cloud placeholder
     in_sync: int = 0
+    # rel_path -> a one-line "what we saw, when" for each deletion candidate
+    history: dict[str, dict] = field(default_factory=dict)
 
     @property
     def out_of_sync(self) -> bool:
@@ -58,10 +60,29 @@ class SyncPlan:
 
 def _index_all(conn, root_label: str) -> dict[str, dict]:
     rows = conn.execute(
-        "SELECT rel_path, hash, is_placeholder, missing FROM files WHERE root_label=?",
+        "SELECT rel_path, hash, is_placeholder, missing, first_seen, last_seen FROM files WHERE root_label=?",
         (root_label,),
     ).fetchall()
     return {r["rel_path"]: dict(r) for r in rows}
+
+
+def _coexisted(present: dict, gone: dict) -> bool:
+    """Was the file ever on both sides at once? A deletion only means
+    something if the copy that's still here was already here when the other
+    one went away. If it first showed up *after* the other side's copy was
+    last seen, the file was moved (or re-added), not deleted from one side --
+    so there is nothing to propagate, and the right move is a plain copy."""
+    first, last = present.get("first_seen"), gone.get("last_seen")
+    if first is None or last is None:
+        return True        # no evidence either way: keep the cautious "needs review"
+    return first <= last
+
+
+def _history(present: dict, gone: dict) -> dict:
+    return {
+        "gone_first_seen": gone.get("first_seen"), "gone_last_seen": gone.get("last_seen"),
+        "present_first_seen": present.get("first_seen"),
+    }
 
 
 def plan_sync(
@@ -88,15 +109,17 @@ def plan_sync(
             else:
                 plan.conflicts.append(rel_path)
         elif a_present and not b_present:
-            if b_gone and root_b.is_deletion_source:
+            if b_gone and root_b.is_deletion_source and _coexisted(a, b):
                 plan.delete_from_a.append(rel_path)
+                plan.history[rel_path] = _history(a, b)
             elif root_b.mode == "mirror":
                 # Never auto-fill a `subset`/`watch` root (e.g. a storage-
                 # limited iCloud folder) — it's intentionally partial.
                 plan.copy_to_b.append(rel_path)
         elif b_present and not a_present:
-            if a_gone and root_a.is_deletion_source:
+            if a_gone and root_a.is_deletion_source and _coexisted(b, a):
                 plan.delete_from_b.append(rel_path)
+                plan.history[rel_path] = _history(b, a)
             elif root_a.mode == "mirror" and rel_path not in ignored_promotions:
                 # Content that showed up on a backup/mirror root but was
                 # never on primary -- a promotion candidate (see the
@@ -130,6 +153,7 @@ def execute_sync(
     plan: SyncPlan,
     apply_deletes: bool = False,
     apply_promotions: bool = False,
+    restore_vanished: bool = False,
 ) -> dict:
     """Applies copy_to_b (filling this backup/subset root from primary) --
     always safe/reversible, so 'easy sync' does it with no extra
@@ -139,7 +163,27 @@ def execute_sync(
     section, not bundled into a plain sync. Deletions are similarly only
     applied when apply_deletes=True, from a caller that already got
     separate, specific confirmation for them."""
-    results = {"copied_to_a": 0, "copied_to_b": 0, "deleted_from_a": 0, "deleted_from_b": 0, "errors": []}
+    results = {
+        "copied_to_a": 0, "copied_to_b": 0, "deleted_from_a": 0, "deleted_from_b": 0,
+        "restored_to_a": 0, "restored_to_b": 0, "errors": [],
+    }
+
+    if restore_vanished:
+        # The other answer to a deletion candidate: the file disappearing
+        # wasn't deliberate (a share hiccup, someone's clean-up elsewhere), so
+        # copy it back from the side that still has it. Plain copies -- safe.
+        for rel in plan.delete_from_a:      # gone from B, still on A
+            try:
+                _copy_one(root_a.path / rel, root_b.path / rel)
+                results["restored_to_b"] += 1
+            except Exception as exc:  # noqa: BLE001
+                results["errors"].append(f"restore_to_b {rel}: {exc}")
+        for rel in plan.delete_from_b:      # gone from A, still on B
+            try:
+                _copy_one(root_b.path / rel, root_a.path / rel)
+                results["restored_to_a"] += 1
+            except Exception as exc:  # noqa: BLE001
+                results["errors"].append(f"restore_to_a {rel}: {exc}")
 
     if apply_promotions:
         for rel in plan.copy_to_a:
