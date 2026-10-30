@@ -667,24 +667,87 @@
 <details id="icloud" class="section">
   <summary>iCloud Storage <span class="count">{{ icloud_summaries|length }}</span></summary>
   <div class="section-body">
-    <p class="subtle">For each root marked <b>icloud</b>: how much is downloaded locally right now vs. left as cloud-only placeholders, and the largest local files — safe candidates to evict (Finder &rarr; Remove Download) to reclaim disk space, since the content stays in the cloud copy.</p>
+    <p class="subtle">What is using space in each root marked <b>icloud</b>, by folder and by file, so you can decide what to remove when iCloud or this Mac's disk runs short. MediaVault never deletes from iCloud: <b>Show in Finder</b> takes you to the item so you can move it to the Trash yourself (iCloud normally keeps deleted files for about 30 days in Recently Deleted).</p>
+
+    {% macro folder_rows(node, total, depth, label) %}
+      {% set kids = node.sorted_children() %}
+      {% for c in kids[:8] %}
+      <details class="icl-folder"{% if depth == 0 and loop.first %} open{% endif %}>
+        <summary>
+          <span class="icl-name">&#128193; {{ c.name }}</span>
+          <span class="icl-bar" title="{{ ((c.bytes / total * 100) if total else 0)|round(1) }}% of this root"><span style="width: {{ [(c.bytes / total * 100) if total else 0, 1]|max }}%"></span></span>
+          <span class="icl-size">{{ c.bytes|human_bytes }}</span>
+          <span class="icl-meta">{{ c.files }} file{{ '' if c.files == 1 else 's' }}{% if c.local_bytes %} · {{ c.local_bytes|human_bytes }} on this Mac{% endif %}</span>
+        </summary>
+        <div class="icl-body">
+          <form method="post" action="/icloud/reveal" class="icl-reveal">
+            <input type="hidden" name="root_label" value="{{ label }}"><input type="hidden" name="rel_path" value="{{ c.path }}">
+            <button type="submit">Show in Finder</button>
+          </form>
+          {% if depth < 3 and c.children %}{{ folder_rows(c, total, depth + 1, label) }}{% endif %}
+        </div>
+      </details>
+      {% endfor %}
+      {% if kids|length > 8 %}
+      {% set rest = kids[8:] %}
+      <div class="icl-more subtle">+ {{ rest|length }} smaller folder{{ '' if rest|length == 1 else 's' }} ({{ rest|sum(attribute='bytes')|human_bytes }})</div>
+      {% endif %}
+    {% endmacro %}
 
     {% for s in icloud_summaries %}
     <h3>{{ s.root.label }}</h3>
-    {% if s.error %}
-    <p class="subtle">{{ s.error }}</p>
-    {% else %}
+    {% if s.error %}<p class="notice warn">{{ s.error }}</p>{% endif %}
+    {% set sp = s.space %}
     <div class="stat-line">
-      <span><strong>{{ s.summary.downloaded_count }}</strong>downloaded locally</span>
-      <span><strong>{{ s.summary.placeholder_count }}</strong>cloud-only placeholders</span>
-      <span><strong>{{ s.summary.downloaded_bytes|human_bytes }}</strong>local disk used here</span>
+      <span><strong>{{ sp.total_bytes|human_bytes }}</strong>in iCloud</span>
+      <span><strong>{{ sp.local_bytes|human_bytes }}</strong>downloaded on this Mac</span>
+      <span><strong>{{ sp.cloud_only_bytes|human_bytes }}</strong>cloud-only</span>
+      <span><strong>{{ sp.file_count }}</strong>files</span>
     </div>
-    <table>
-      <tr><th>Path</th><th>Size</th></tr>
-      {% for rel_path, size in s.largest %}
-      <tr><td class="path">{{ rel_path }}</td><td>{{ size|human_bytes }}</td></tr>
+    {% if sp.hidden_bytes or sp.unknown_size %}
+    <p class="subtle">{% if sp.hidden_bytes %}{{ sp.hidden_bytes|human_bytes }} in hidden folders isn't listed below. {% endif %}{% if sp.unknown_size %}{{ sp.unknown_size }} file{{ '' if sp.unknown_size == 1 else 's' }} without a known size aren't counted.{% endif %}</p>
+    {% endif %}
+
+    <h4>Biggest folders</h4>
+    <div class="icl-folders">{{ folder_rows(sp.tree, sp.total_bytes, 0, s.root.label) }}</div>
+
+    <h4>Biggest files</h4>
+    <div class="icl-files">
+      {% for f in sp.files %}
+      <div class="icl-file">
+        <span class="icl-fsize">{{ f.size|human_bytes }}</span>
+        <span class="icl-fwhere">
+          <span class="icl-fname">{{ f.name }}</span>
+          <span class="icl-fpath">{{ f.folder or '(top level)' }}</span>
+          <span class="icl-fstate">
+            <span class="pill {{ 'warn' if f.local else '' }}">{{ 'on this Mac' if f.local else 'cloud-only' }}</span>
+            {% if f.only_copy %}
+            <span class="pill warn" title="No other drive has a file with this name and size">only copy</span>
+            {% else %}
+            {% for e in f.elsewhere %}<span class="pill ok" title="{{ e.path }} — matched by {{ e.match }}">also on {{ e.root }}{{ '' if e.match == 'content' else ' (name & size)' }}</span>{% endfor %}
+            {% endif %}
+          </span>
+        </span>
+        <form method="post" action="/icloud/reveal">
+          <input type="hidden" name="root_label" value="{{ s.root.label }}"><input type="hidden" name="rel_path" value="{{ f.rel_path }}">
+          <button type="submit">Show in Finder</button>
+        </form>
+      </div>
       {% endfor %}
-    </table>
+    </div>
+    <p class="subtle">“Also on” means another tracked drive holds a file with the same content, or — for files that were never downloaded and so can't be compared by content — the same name and size. “Only copy” means deleting it from iCloud would lose it.</p>
+
+    {% if not s.error %}
+    <details class="subsection">
+      <summary>Downloaded on this Mac — safe to remove the local copy ({{ s.summary.downloaded_count }})</summary>
+      <p class="subtle">The content stays in iCloud. Finder &rarr; right-click &rarr; Remove Download frees this Mac's disk, not your iCloud storage.</p>
+      <table>
+        <tr><th>Path</th><th>Size</th></tr>
+        {% for rel_path, size in s.largest %}
+        <tr><td class="path">{{ rel_path }}</td><td>{{ size|human_bytes }}</td></tr>
+        {% endfor %}
+      </table>
+    </details>
     {% endif %}
     {% else %}
     <p class="subtle">No roots marked "icloud" yet. Add one under Roots above.</p>

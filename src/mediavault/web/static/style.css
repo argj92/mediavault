@@ -183,6 +183,7 @@ h1 {
   letter-spacing: -0.01em;
 }
 h2 { margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.25rem; }
+h4 { margin: 1.4rem 0 0.6rem; color: var(--bright); font-size: 0.9rem; font-weight: 650; }
 h3 { margin-top: 1.4rem; color: var(--bright); font-size: 0.95rem; font-weight: 650; }
 
 .subtle { color: var(--subtle); font-size: 0.88rem; line-height: 1.5; }
@@ -448,3 +449,31 @@ code { background: var(--panel-alt); border: 1px solid var(--border); border-rad
 .sched-advice.warn { background: rgba(239, 83, 80, 0.08); border-color: rgba(239, 83, 80, 0.4); }
 .sched-advice.note { background: rgba(224, 167, 47, 0.08); border-color: rgba(224, 167, 47, 0.4); }
 .sched-advice.ok { color: var(--subtle); }
+
+/* iCloud space: folder tree + biggest files */
+.icl-folder { background: var(--panel-alt); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 0.5rem; }
+.icl-folder > summary { cursor: pointer; list-style: none; display: grid; grid-template-columns: minmax(8rem, 1.2fr) minmax(5rem, 1fr) 5.5rem minmax(0, 1.3fr); align-items: center; gap: 0.4rem 1rem; padding: 0.7rem 1rem; }
+.icl-folder > summary::-webkit-details-marker { display: none; }
+.icl-name { color: var(--bright); font-weight: 600; overflow-wrap: anywhere; }
+.icl-bar { height: 0.5rem; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.icl-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.icl-size { text-align: right; font-variant-numeric: tabular-nums; color: var(--bright); }
+.icl-meta { color: var(--subtle); font-size: 0.78rem; }
+.icl-body { padding: 0 1rem 0.8rem 1.6rem; }
+.icl-body .icl-folder { background: transparent; }
+.icl-reveal { margin: 0 0 0.6rem; }
+.icl-reveal button, .icl-file button { padding: 0.25rem 0.6rem; font-size: 0.76rem; }
+.icl-more { padding: 0.2rem 0.4rem 0.6rem; }
+.icl-files { display: flex; flex-direction: column; border-top: 1px solid var(--border); margin-bottom: 0.8rem; }
+.icl-file { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) auto; align-items: center; gap: 0.5rem 1rem; padding: 0.8rem 0.25rem; border-bottom: 1px solid var(--border); }
+.icl-fsize { font-weight: 650; color: var(--bright); font-variant-numeric: tabular-nums; text-align: right; }
+.icl-fwhere { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.icl-fname { color: var(--bright); font-size: 0.88rem; overflow-wrap: anywhere; }
+.icl-fpath { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; color: var(--subtle); overflow-wrap: anywhere; }
+.icl-fstate { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.25rem; }
+@media (max-width: 700px) {
+  .icl-folder > summary { grid-template-columns: 1fr auto; }
+  .icl-bar, .icl-meta { grid-column: 1 / -1; }
+  .icl-file { grid-template-columns: 1fr; }
+  .icl-fsize { text-align: left; }
+}
