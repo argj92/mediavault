@@ -124,3 +124,20 @@ def test_find_tailscale_falls_back_when_path_is_minimal(monkeypatch, tmp_path):
     assert tailscale.find_tailscale() == str(fake) and tailscale.is_available()
     monkeypatch.setattr(tailscale, "_FALLBACK_PATHS", ("/nonexistent/tailscale",))
     assert tailscale.find_tailscale() is None and not tailscale.is_available()
+
+
+def test_a_failed_tailscale_lookup_is_not_repeated_on_every_request(monkeypatch):
+    """The guard runs per request; a Tailscale that's down must cost one slow
+    subprocess per retry window, not one per page load."""
+    calls = []
+    monkeypatch.setattr(guard, "_ts_name", None)
+    monkeypatch.setattr(guard, "_ts_failed_at", float("-inf"))
+    monkeypatch.setattr(guard, "find_tailscale", lambda: "/x/tailscale")
+    monkeypatch.setattr(guard.subprocess, "run", lambda *a, **k: calls.append(1) or (_ for _ in ()).throw(OSError("down")))
+
+    assert [guard.tailscale_dns_name() for _ in range(5)] == [None] * 5
+    assert len(calls) == 1
+
+    monkeypatch.setattr(guard, "_ts_failed_at", float("-inf"))      # retry window passed
+    guard.tailscale_dns_name()
+    assert len(calls) == 2
