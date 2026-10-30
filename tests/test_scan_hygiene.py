@@ -156,3 +156,58 @@ def test_failed_or_partial_cycles_are_retried_sooner_than_the_interval():
 def test_retry_is_never_longer_than_a_short_configured_interval():
     w = _worker(1)
     assert w._next_delay(None) == 60 and w._next_delay({"scan_errors": ["x"]}) == 60
+
+
+def _vanish_on(*names):
+    real = scanner.hash_file
+
+    def hash_file(path, algo="sha256"):
+        if path.name in names:
+            path.unlink()
+            raise FileNotFoundError(2, "No such file or directory")
+        return real(path, algo=algo)
+
+    return hash_file
+
+
+def test_a_file_vanishing_mid_scan_does_not_abort_the_scan(conn, tmp_path, monkeypatch):
+    root = make_root(tmp_path, label="lib", role="primary", mode="mirror")
+    write_file(root.path, "A.mkv", b"aaa")
+    write_file(root.path, "B.mkv", b"bbb")
+    write_file(root.path, "C.mkv", b"ccc")
+    monkeypatch.setattr(scanner, "hash_file", _vanish_on("B.mkv"))
+
+    stats = scanner.scan_root(conn, root, hash_algo="sha256")
+
+    assert stats["vanished"] == 1
+    assert db.get_abandoned_scan(conn, "lib") is None
+    assert db.get_last_finished_scan(conn, "lib")["error"] is None
+    assert {f["rel_path"] for f in db.all_files(conn, root_label="lib")} == {"A.mkv", "C.mkv"}
+
+
+def test_a_vanished_file_that_was_indexed_is_marked_missing(conn, tmp_path, monkeypatch):
+    root = make_root(tmp_path, label="lib", role="primary", mode="mirror")
+    write_file(root.path, "A.mkv", b"aaa")
+    write_file(root.path, "B.mkv", b"bbb")
+    scanner.scan_root(conn, root, hash_algo="sha256")
+    write_file(root.path, "B.mkv", b"bbbb")                  # changed, so it gets re-hashed
+    monkeypatch.setattr(scanner, "hash_file", _vanish_on("B.mkv"))
+
+    scanner.scan_root(conn, root, hash_algo="sha256")
+
+    assert db.get_file(conn, "lib", "B.mkv")["missing"] == 1
+    assert db.get_file(conn, "lib", "A.mkv")["missing"] == 0
+
+
+def test_a_flood_of_vanishing_files_still_aborts_the_scan(conn, tmp_path, monkeypatch):
+    root = make_root(tmp_path, label="lib", role="primary", mode="mirror")
+    names = [f"F{i:03d}.mkv" for i in range(scanner.MAX_VANISHED_PER_SCAN + 5)]
+    for n in names:
+        write_file(root.path, n, b"x" + n.encode())
+    monkeypatch.setattr(scanner, "hash_file", _vanish_on(*names))
+
+    with pytest.raises(FileNotFoundError):
+        scanner.scan_root(conn, root, hash_algo="sha256")
+
+    assert db.get_abandoned_scan(conn, "lib") is not None
+    assert conn.execute("SELECT COUNT(*) FROM files WHERE root_label='lib' AND missing=1").fetchone()[0] == 0

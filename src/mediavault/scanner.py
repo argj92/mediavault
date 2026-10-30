@@ -25,6 +25,21 @@ from .hashing import hash_file, quick_signature, resolve_algo
 # is in trouble and still aborts the scan.
 _SKIPPABLE_FILE_ERRNOS = {errno.EDEADLK, errno.EACCES, errno.EPERM}
 
+# Files can be deleted between being listed and being read (a download
+# finishing, a clean-up elsewhere). One or two is normal; a flood means the
+# share dropped mid-scan, and carrying on would index a half-empty root and
+# mark everything else missing -- which sync reads as "you deleted these".
+MAX_VANISHED_PER_SCAN = 25
+
+
+def _note_vanished(stats: dict, root, exc: OSError) -> None:
+    """Counts a file that disappeared mid-scan, or re-raises if it looks like
+    the root itself went away. The file is simply not indexed this time, so
+    the end-of-scan pass marks it missing like any other deleted file."""
+    stats["vanished"] += 1
+    if stats["vanished"] > MAX_VANISHED_PER_SCAN or not root.path.is_dir():
+        raise exc
+
 
 def _keep_as_unreadable(conn, root, rel_path: str, size=None) -> None:
     """Record a file that is present but can't be read right now, the way a
@@ -109,7 +124,7 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
     stop_walk = threading.Event()
 
     try:
-        stats = {"files_scanned": 0, "new_files": 0, "updated_files": 0, "missing_files": 0, "placeholders": 0, "unreadable": 0}
+        stats = {"files_scanned": 0, "new_files": 0, "updated_files": 0, "missing_files": 0, "placeholders": 0, "unreadable": 0, "vanished": 0}
         last_progress_commit = time.monotonic()
 
         def on_idle() -> None:
@@ -150,6 +165,9 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
             try:
                 size, mtime = quick_signature(full_path)
             except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    _note_vanished(stats, root, exc)
+                    continue
                 if exc.errno not in _SKIPPABLE_FILE_ERRNOS:
                     raise
                 stats["unreadable"] += 1
@@ -172,6 +190,9 @@ def scan_root(conn: sqlite3.Connection, root: RootConfig, hash_algo: str = "blak
             try:
                 file_hash = hash_file(full_path, algo=algo)
             except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    _note_vanished(stats, root, exc)
+                    continue
                 if exc.errno not in _SKIPPABLE_FILE_ERRNOS:
                     raise
                 stats["unreadable"] += 1
